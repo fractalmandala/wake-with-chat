@@ -1,0 +1,2036 @@
+use crate::i18n::t;
+use gpui::prelude::FluentBuilder as _;
+use gpui::*;
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
+use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_component::switch::Switch;
+use gpui_component::{
+    h_flex, v_flex, ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _,
+    StyledExt as _, TitleBar, WindowExt as _,
+};
+
+use wake_core::models::AgentId;
+
+use crate::format::tilde_path;
+use crate::theme::agent_series_color;
+use crate::ui::{
+    overlay_layers, show_in_fm, BUTTON_SM_H, FONT_BODY, FONT_CAPTION, FONT_DISPLAY, FONT_HEADING,
+    FONT_LABEL, FONT_TITLE, RADIUS_BUTTON, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
+    SPACE_XXL,
+};
+use crate::update::{self, UpdateStatus};
+use crate::workbench::{DataSourceRow, OpenAbout, OpenSettings, OpenUpdates, Workbench};
+use crate::{theme, theme::AppearancePreference};
+
+const SETTINGS_SIDEBAR_W: Pixels = px(180.);
+const SETTINGS_PAGE_TOP: Pixels = px(38.);
+/// Connect 页两条 Setup guide 的去处:MCP 面与命令行面各自的完整文档
+const CONNECT_GUIDE_URL: &str = "https://github.com/iAmCorey/Wake/blob/main/docs/mcp.md";
+const CONNECT_CLI_GUIDE_URL: &str = "https://github.com/iAmCorey/Wake/blob/main/docs/cli.md";
+
+fn icon(path: &'static str) -> Icon {
+    Icon::empty().path(path)
+}
+
+fn format_storage_size(bytes: u64) -> String {
+    const KIB: f64 = 1024.;
+    const MIB: f64 = KIB * 1024.;
+    const GIB: f64 = MIB * 1024.;
+    let bytes = bytes as f64;
+    if bytes >= GIB {
+        format!("{:.1} GB", bytes / GIB)
+    } else if bytes >= MIB {
+        format!("{:.1} MB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.1} KB", bytes / KIB)
+    } else {
+        format!("{} bytes", bytes as u64)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsPage {
+    General,
+    Locations,
+    Remotes,
+    Connect,
+    AgentAccess,
+    Providers,
+    Data,
+    Updates,
+    About,
+}
+
+/// Settings 内常规文字按钮共用一套尺寸和材质；避免页面各自混用
+/// outline / primary / 默认 ButtonGroup 后形成多套视觉语言。
+/// pub(crate):详情页的单段 Open In 按钮(workbench)用同一配方。
+pub(crate) fn settings_button(button: Button, cx: &App) -> Button {
+    let theme = cx.theme();
+    button
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(theme.secondary)
+                .foreground(theme.secondary_foreground)
+                .hover(theme.secondary_hover)
+                .active(theme.secondary_active),
+        )
+        .border_1()
+        .border_color(theme.border)
+        .small()
+        .rounded(RADIUS_BUTTON)
+}
+
+/// 设置页里真正需要用户继续完成的主操作。保持 6px 圆角，但使用中号高度、
+/// primary 填充和轻阴影，让它与普通的重试 / 再检查动作拉开层级。
+pub(crate) fn settings_primary_button(button: Button, cx: &App) -> Button {
+    let theme = cx.theme();
+    button
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(theme.primary)
+                .foreground(theme.primary_foreground)
+                .hover(theme.primary_hover)
+                .active(theme.primary_active)
+                .shadow(true),
+        )
+        .border_1()
+        .border_color(theme.primary)
+        .rounded(RADIUS_BUTTON)
+}
+
+/// Settings 各页顶部的标题 + 一句说明(版式只写一次:SPACE_XXL 边距、
+/// SETTINGS_PAGE_TOP 顶距、FONT_TITLE semibold + FONT_CAPTION muted)
+pub(crate) fn settings_page_header(title: &'static str, subtitle: &'static str, cx: &App) -> Div {
+    let theme = cx.theme();
+    v_flex()
+        .flex_shrink_0()
+        .px(SPACE_XXL)
+        .pt(SETTINGS_PAGE_TOP)
+        .pb(SPACE_XL)
+        .gap(px(5.))
+        .child(
+            div()
+                .text_size(FONT_TITLE)
+                .font_semibold()
+                .text_color(theme.foreground)
+                .child(title),
+        )
+        .child(
+            div()
+                .text_size(FONT_CAPTION)
+                .text_color(theme.muted_foreground)
+                .child(subtitle),
+        )
+}
+
+/// "一张卡一行"的信息卡(Data 的 Storage、Connect 的 MCP server 共用):popover
+/// 底圆角卡,84px 行,主信息 FONT_BODY,副行由调用方给(caption 级),右侧一个操作
+fn settings_info_card(
+    primary: &'static str,
+    details: Vec<AnyElement>,
+    trailing: AnyElement,
+    min_h: Pixels,
+    cx: &App,
+) -> Div {
+    let theme = cx.theme();
+    // overflow_hidden 让 taffy 把这张卡的 min-height 当 0,放进滚动列里会被
+    // 压扁到只剩一行;固定内容的卡必须 flex_shrink_0(CLAUDE.md 的 flex 陷阱)
+    v_flex()
+        .w_full()
+        .flex_shrink_0()
+        .overflow_hidden()
+        .rounded(theme.radius_lg)
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.popover)
+        .child(
+            h_flex()
+                .min_h(min_h)
+                .px(SPACE_LG)
+                .gap(SPACE_LG)
+                .items_center()
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(3.))
+                        .child(
+                            div()
+                                .text_size(FONT_BODY)
+                                .text_color(theme.foreground)
+                                .child(primary),
+                        )
+                        .children(details),
+                )
+                .child(trailing),
+        )
+}
+
+/// 一个并排辅助二进制的三件事。两张卡同构,所以探测也只写一遍
+struct BinaryFacts {
+    path: String,
+    display: SharedString,
+    exists: bool,
+}
+
+impl BinaryFacts {
+    fn probe(stem: &str) -> Self {
+        let found = wake_core::mcp::sibling_named(stem);
+        let exists = found.as_ref().is_some_and(|p| p.is_file());
+        // 找不到就退回裸名,展示时至少还是个可辨认的东西
+        let path = found
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| stem.to_string());
+        Self {
+            display: tilde_path(&path).into(),
+            exists,
+            path,
+        }
+    }
+}
+
+/// Connect 页展示的事实,开窗时算一次:current_exe/stat/片段拼装都不该跑在
+/// 每帧的 render 里(CLAUDE.md:render 里的路径探测必须缓存)
+struct ConnectInfo {
+    mcp: BinaryFacts,
+    cli: BinaryFacts,
+    /// 把 wake-cli 放进 PATH 的那条命令;deb/tar 已在 `…/bin` 里、或 Windows
+    /// 上没有一行命令能说清时为 None,那时就不给这个按钮
+    cli_path_command: Option<String>,
+    /// MCP clients 卡的三行:文案与片段来自 wake-core,与 `wake-mcp setup`
+    /// 同源;GUI 只展示与复制,不代写别家配置
+    snippets: Vec<wake_core::mcp::SetupSnippet>,
+}
+
+impl ConnectInfo {
+    fn probe() -> Self {
+        let mcp = BinaryFacts::probe("wake-mcp");
+        let cli = BinaryFacts::probe("wake-cli");
+        Self {
+            snippets: wake_core::mcp::setup_snippets(std::path::Path::new(&mcp.path)),
+            cli_path_command: wake_core::cli::path_command(std::path::Path::new(&cli.path)),
+            mcp,
+            cli,
+        }
+    }
+}
+
+/// Agent access 页每个 ACP agent 一张卡的输入行;实体在 Settings 开窗时建,
+/// Change 事件直接落盘 agent-auth.json(chat 面板每次启动会话现读盘)
+struct AgentAuthRow {
+    agent: AgentId,
+    key: Option<Entity<InputState>>,
+    base: Option<Entity<InputState>>,
+    extra: Entity<TextareaState>,
+}
+
+/// auth_field_changed 的写入目标(哪个输入框变了)
+#[derive(Clone, Copy)]
+enum AuthField {
+    Key,
+    Base,
+    Extra,
+}
+
+pub(crate) struct SettingsView {
+    focus_handle: FocusHandle,
+    workbench: Entity<Workbench>,
+    appearance: AppearancePreference,
+    show_unavailable: bool,
+    connect: ConnectInfo,
+    /// Connect 页里展开了代码片段的行(按 snippets 下标);Settings 重开即复位
+    connect_shown: std::collections::HashSet<usize>,
+    /// 刚复制过的按钮 id:按钮原地显示 "Copied" 1.6s。不用 toast——gpui-component 的
+    /// 通知在窗口失活或被悬停时会暂停自动关闭,Settings 这种从属窗里它常常就
+    /// 挂着不走(用户 2026-09-08 反馈);主界面的 Copy Session ID / Copy code 也
+    /// 从不弹通知
+    copied: Option<SharedString>,
+    /// 连点时只有最后一次的定时器能清掉 copied
+    copied_generation: u64,
+    /// Agent access 页的输入行与它们的落盘镜像
+    auth_rows: Vec<AgentAuthRow>,
+    auth: crate::agent_auth::AgentAuthMap,
+    providers_page: Entity<crate::providers_page::ProvidersPage>,
+    _workbench_observer: Option<Subscription>,
+    _auth_subs: Vec<Subscription>,
+}
+
+impl SettingsView {
+    pub(crate) fn new(
+        workbench: Entity<Workbench>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let observed = workbench.clone();
+        // Settings 是在 Workbench::open_settings 的 update 栈内创建的；此处
+        // 立即 observe 会尝试反读仍被独占借用的 Workbench，触发 double lease。
+        // 下一帧注册时外层 update 已退出。
+        cx.on_next_frame(window, move |this, _, cx| {
+            this._workbench_observer = Some(cx.observe(&observed, |_, _, cx| cx.notify()));
+        });
+        // Agent access 输入行:每个 ACP agent 一张卡,key/端点按方言表
+        // 决定有无(登录制 agent 只有 extra env + 登录指引)。Change 即存
+        let auth = crate::agent_auth::load();
+        let mut auth_rows = Vec::new();
+        let mut auth_subs = Vec::new();
+        for agent in AgentId::ALL
+            .iter()
+            .copied()
+            .filter(|a| wake_core::services::acp::acp_dialect(*a).is_some())
+        {
+            let dialect = wake_core::services::acp::acp_dialect(agent).expect("filtered");
+            let entry = auth.get(agent.as_str()).cloned().unwrap_or_default();
+            let key = dialect.auth_key_env.map(|env_name| {
+                let state = cx
+                    .new(|cx| InputState::new(window, cx).masked(true).placeholder(env_name));
+                state.update(cx, |state, cx| state.set_value(&entry.api_key, window, cx));
+                auth_subs.push(cx.subscribe_in(
+                    &state,
+                    window,
+                    move |this, input, event: &InputEvent, window, cx| {
+                        if matches!(event, InputEvent::Change) {
+                            let value = input.read(cx).value().to_string();
+                            this.auth_field_changed(agent, AuthField::Key, value, window, cx);
+                        }
+                    },
+                ));
+                state
+            });
+            let base = dialect.auth_base_env.map(|env_name| {
+                let state = cx.new(|cx| InputState::new(window, cx).placeholder(env_name));
+                state.update(cx, |state, cx| state.set_value(&entry.base_url, window, cx));
+                auth_subs.push(cx.subscribe_in(
+                    &state,
+                    window,
+                    move |this, input, event: &InputEvent, window, cx| {
+                        if matches!(event, InputEvent::Change) {
+                            let value = input.read(cx).value().to_string();
+                            this.auth_field_changed(agent, AuthField::Base, value, window, cx);
+                        }
+                    },
+                ));
+                state
+            });
+            let extra = cx.new(|cx| {
+                TextareaState::new(window, cx)
+                    .auto_grow(2, 6)
+                    .placeholder("NAME=VALUE")
+            });
+            extra.update(cx, |state, cx| state.set_value(&entry.extra_env, window, cx));
+            auth_subs.push(cx.subscribe_in(
+                &extra,
+                window,
+                move |this, input, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let value = input.read(cx).value().to_string();
+                        this.auth_field_changed(agent, AuthField::Extra, value, window, cx);
+                    }
+                },
+            ));
+            auth_rows.push(AgentAuthRow {
+                agent,
+                key,
+                base,
+                extra,
+            });
+        }
+        Self {
+            focus_handle: cx.focus_handle(),
+            workbench,
+            appearance: theme::appearance_preference(),
+            show_unavailable: false,
+            connect: ConnectInfo::probe(),
+            connect_shown: Default::default(),
+            copied: None,
+            copied_generation: 0,
+            auth_rows,
+            auth,
+            providers_page: cx.new(crate::providers_page::ProvidersPage::new),
+            _workbench_observer: None,
+            _auth_subs: auth_subs,
+        }
+    }
+
+    fn render_nav_item(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        icon_path: &'static str,
+        page: SettingsPage,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let active = self.workbench.read(cx).settings_page() == page;
+        let workbench = self.workbench.clone();
+        h_flex()
+            .id(id)
+            .h(px(34.))
+            .w_full()
+            .px(SPACE_MD)
+            .gap(SPACE_SM)
+            .items_center()
+            .rounded(theme.radius)
+            .cursor_pointer()
+            .when(active, |this| {
+                this.bg(theme.sidebar_accent)
+                    .text_color(theme.sidebar_accent_foreground)
+            })
+            .when(!active, |this| {
+                this.text_color(theme.sidebar_foreground)
+                    .hover(|style| style.bg(theme.sidebar_accent.opacity(0.55)))
+            })
+            .on_click(move |_, _, cx| {
+                workbench.update(cx, |this, cx| this.select_settings_page(page, cx));
+            })
+            .child(icon(icon_path).with_size(px(15.)).flex_shrink_0())
+            .child(div().text_size(FONT_BODY).font_medium().child(label))
+            .into_any_element()
+    }
+
+    fn render_sidebar(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let show_titlebar = cfg!(target_os = "macos")
+            || matches!(window.window_decorations(), Decorations::Client { .. });
+
+        v_flex()
+            .w(SETTINGS_SIDEBAR_W)
+            .h_full()
+            .flex_shrink_0()
+            .bg(theme.sidebar)
+            .border_r_1()
+            .border_color(theme.sidebar_border)
+            .when(show_titlebar, |this| this.child(TitleBar::new()))
+            .child(
+                div()
+                    .px(SPACE_LG)
+                    .pt(SPACE_SM)
+                    .pb(SPACE_XL)
+                    .text_size(FONT_HEADING)
+                    .font_semibold()
+                    .text_color(theme.sidebar_foreground)
+                    .child(t("Settings")),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .px(SPACE_SM)
+                    .gap(px(2.))
+                    .child(self.render_nav_item(
+                        "settings-general-nav",
+                        t("General"),
+                        "icons/settings.svg",
+                        SettingsPage::General,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "settings-locations-nav",
+                        t("Locations"),
+                        "icons/hard-drive.svg",
+                        SettingsPage::Locations,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "settings-remotes-nav",
+                        t("Remote hosts"),
+                        "icons/server.svg",
+                        SettingsPage::Remotes,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "settings-connect-nav",
+                        t("Connect"),
+                        "icons/plug.svg",
+                        SettingsPage::Connect,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "settings-providers-nav",
+                        t("Providers"),
+                        "icons/layers.svg",
+                        SettingsPage::Providers,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "settings-agent-access-nav",
+                        t("Agent access"),
+                        "icons/key.svg",
+                        SettingsPage::AgentAccess,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "settings-data-nav",
+                        t("Data"),
+                        "icons/database.svg",
+                        SettingsPage::Data,
+                        cx,
+                    )),
+            )
+            .child(
+                v_flex()
+                    .px(SPACE_SM)
+                    .pb(SPACE_SM)
+                    .gap(px(2.))
+                    .child(self.render_nav_item(
+                        "settings-updates-nav",
+                        t("Updates"),
+                        "icons/download.svg",
+                        SettingsPage::Updates,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "settings-about-nav",
+                        t("About"),
+                        "icons/info.svg",
+                        SettingsPage::About,
+                        cx,
+                    )),
+            )
+            .into_any_element()
+    }
+
+    /// General 页的设置行:与 Data/Connect 的信息卡同一张卡,只是矮一档
+    /// (72 是 Appearance 行的用户定稿值),副行是 caption 级说明
+    fn setting_row(
+        title: &'static str,
+        subtitle: &'static str,
+        control: impl IntoElement,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let caption = div()
+            .text_size(FONT_CAPTION)
+            .text_color(cx.theme().muted_foreground)
+            .child(subtitle)
+            .into_any_element();
+        settings_info_card(
+            title,
+            vec![caption],
+            control.into_any_element(),
+            px(72.),
+            cx,
+        )
+        .into_any_element()
+    }
+
+    /// 语言选择:System + English + 装好的语言包。选项数量随语言包增减,
+    /// 所以是下拉而不是 Appearance 那样的分段控件
+    fn language_control(&self) -> AnyElement {
+        // 直接读全局:镜像成字段就要在每个切换点写回,而 `apply_language`
+        // 改的是全局(appearance 那个字段正是这么漂的)
+        let current = crate::i18n::preference().map(|locale| locale.tag);
+        Button::new("settings-language")
+            .outline()
+            .small()
+            .rounded(RADIUS_BUTTON)
+            .label(current.map_or(t("System"), |tag| {
+                crate::i18n::available()
+                    .iter()
+                    .find(|locale| locale.tag == tag)
+                    .map_or(t("System"), |locale| locale.name)
+            }))
+            .icon(icon("icons/chevron-down.svg").with_size(px(14.)))
+            .dropdown_menu(move |mut menu, _, _| {
+                // 选项只在菜单打开时才需要,`available()` 又是 'static 切片
+                // ——留在闭包里就不必每帧建一个 Vec 再 clone 一份进来
+                menu = menu.min_w(px(160.));
+                let options = std::iter::once((None, t("System"))).chain(
+                    crate::i18n::available()
+                        .iter()
+                        .map(|locale| (Some(locale.tag), locale.name)),
+                );
+                for (tag, name) in options {
+                    menu = menu.item(PopupMenuItem::new(name).checked(tag == current).on_click(
+                        move |_, window, cx| {
+                            if let Err(error) = crate::i18n::set_language(tag, cx) {
+                                window.push_notification(
+                                    gpui_component::notification::Notification::error(crate::tf!(
+                                        "Couldn't save language: {}",
+                                        error
+                                    )),
+                                    cx,
+                                );
+                            }
+                        },
+                    ));
+                }
+                menu
+            })
+            .into_any_element()
+    }
+
+    fn appearance_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        preference: AppearancePreference,
+        cx: &Context<Self>,
+    ) -> Button {
+        let theme = cx.theme();
+        let selected = self.appearance == preference;
+        Button::new(id)
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .color(theme.transparent)
+                    .foreground(if selected {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .hover(theme.secondary_hover)
+                    .active(theme.popover),
+            )
+            .small()
+            .w(px(64.))
+            .rounded(RADIUS_BUTTON)
+            .label(label)
+            .selected(selected)
+            .when(selected, |this| this.shadow_xs())
+            .on_click(cx.listener(move |this, _, window, cx| {
+                match theme::set_appearance(preference, Some(window), cx) {
+                    Ok(()) => {
+                        this.appearance = preference;
+                        cx.notify();
+                    }
+                    Err(error) => window.push_notification(
+                        gpui_component::notification::Notification::error(crate::tf!(
+                            "Couldn't save appearance: {}",
+                            error
+                        )),
+                        cx,
+                    ),
+                }
+            }))
+    }
+
+    fn render_general(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .bg(theme.background)
+            .child(
+                v_flex()
+                    .flex_shrink_0()
+                    .px(SPACE_XXL)
+                    .pt(SETTINGS_PAGE_TOP)
+                    .pb(SPACE_XL)
+                    .gap(px(5.))
+                    .child(
+                        div()
+                            .text_size(FONT_TITLE)
+                            .font_semibold()
+                            .text_color(theme.foreground)
+                            .child(t("General")),
+                    )
+                    .child(
+                        div()
+                            .text_size(FONT_CAPTION)
+                            .text_color(theme.muted_foreground)
+                            .child(t("Customize how Wake looks and reads.")),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .px(SPACE_XXL)
+                    .gap(SPACE_MD)
+                    .child(Self::setting_row(
+                        t("Appearance"),
+                        t("Follow the system or keep Wake light or dark."),
+                        h_flex()
+                            .h(BUTTON_SM_H + px(4.))
+                            .p(px(2.))
+                            .rounded(theme.radius)
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.secondary)
+                            .child(self.appearance_button(
+                                "appearance-system",
+                                t("System"),
+                                AppearancePreference::System,
+                                cx,
+                            ))
+                            .child(self.appearance_button(
+                                "appearance-light",
+                                t("Light"),
+                                AppearancePreference::Light,
+                                cx,
+                            ))
+                            .child(self.appearance_button(
+                                "appearance-dark",
+                                t("Dark"),
+                                AppearancePreference::Dark,
+                                cx,
+                            )),
+                        cx,
+                    ))
+                    .child(Self::setting_row(
+                        t("Language"),
+                        t("Follow the system language, or pick one."),
+                        self.language_control(),
+                        cx,
+                    )),
+            )
+            .into_any_element()
+    }
+
+    fn render_data(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let snapshot = self.workbench.read(cx).data_settings_snapshot();
+        // 会话计数的措辞单点在 workbench 的 session_tally(Locations 与
+        // Remote hosts 也用它);这里只补分隔符,不再复制一遍句子。占用已含
+        // remotes/ 镜像(Workbench 后台算好放进快照),镜像非零时另注一句
+        let mut summary = format!(
+            "{} · {}",
+            crate::workbench::session_tally(snapshot.session_count),
+            format_storage_size(snapshot.size_bytes)
+        );
+        if snapshot.remote_bytes > 0 {
+            summary.push(' ');
+            summary.push_str(&crate::tf!(
+                "({} in remote mirrors)",
+                format_storage_size(snapshot.remote_bytes)
+            ));
+        }
+        let summary: SharedString = summary.into();
+        let reveal_path = snapshot.raw_path.clone();
+        let show_in_finder = settings_button(
+            Button::new("settings-show-data")
+                .icon(icon("icons/folder.svg").with_size(px(13.)))
+                .label(show_in_fm()),
+            cx,
+        )
+        .on_click(move |_, _, _| {
+            wake_core::services::terminal::open_in_file_manager(reveal_path.as_ref())
+        });
+        let details = vec![
+            div()
+                .w_full()
+                .truncate()
+                .text_size(FONT_CAPTION)
+                .text_color(theme.muted_foreground)
+                .child(snapshot.display_path)
+                .into_any_element(),
+            div()
+                .text_size(FONT_CAPTION)
+                .text_color(theme.muted_foreground)
+                .child(summary)
+                .into_any_element(),
+        ];
+
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .bg(theme.background)
+            .child(settings_page_header(
+                t("Data"),
+                t("See where Wake stores local data. Sessions refresh automatically."),
+                cx,
+            ))
+            .child(
+                v_flex()
+                    .px(SPACE_XXL)
+                    .gap(SPACE_SM)
+                    .child(
+                        div()
+                            .text_size(FONT_CAPTION)
+                            .font_semibold()
+                            .text_color(theme.foreground)
+                            .child(t("Storage")),
+                    )
+                    .child(settings_info_card(
+                        t("Wake data"),
+                        details,
+                        show_in_finder.into_any_element(),
+                        px(84.),
+                        cx,
+                    )),
+            )
+            .into_any_element()
+    }
+
+    /// Settings → Connect 的复制按钮:写剪贴板,按钮原地变 "Copied" 片刻后复原
+    fn copy_button(
+        &self,
+        id: SharedString,
+        label: &'static str,
+        text: String,
+        cx: &Context<Self>,
+    ) -> Button {
+        let copied = self.copied.as_ref() == Some(&id);
+        let clicked_id = id.clone();
+        settings_button(
+            Button::new(id)
+                .icon(
+                    icon(if copied {
+                        "icons/check.svg"
+                    } else {
+                        "icons/copy.svg"
+                    })
+                    .with_size(px(13.)),
+                )
+                .label(if copied { t("Copied") } else { label }),
+            cx,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+            this.show_copied(clicked_id.clone(), cx);
+        }))
+    }
+
+    fn show_copied(&mut self, id: SharedString, cx: &mut Context<Self>) {
+        self.copied_generation = self.copied_generation.wrapping_add(1);
+        let generation = self.copied_generation;
+        self.copied = Some(id);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1_600))
+                .await;
+            this.update(cx, |this, cx| {
+                if this.copied_generation == generation {
+                    this.copied = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Settings → Connect:把 Wake 的索引以 MCP 只读暴露给 coding agent。页面只放
+    /// **状态与动作**:server 卡(路径 + Copy path)、Agents 卡(每家一行一个
+    /// Copy 钮)、一句 caption 加 Setup guide 链接。代码块与工具表都不放——那是
+    /// README 的内容,塞进设置窗怎么排都像教程(用户 2026-09-08 三轮定稿)。
+    /// 只展示与复制,不代写别家配置;片段与 `wake-mcp setup` 同源(wake-core mcp)
+    fn render_connect(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let dark = theme.mode.is_dark();
+        let info = &self.connect;
+        let mono = theme.mono_font_family.clone();
+        let count = info.snippets.len();
+
+        let agent_rows: Vec<AnyElement> = info
+            .snippets
+            .iter()
+            .enumerate()
+            .map(|(ix, s)| {
+                let shown = self.connect_shown.contains(&ix);
+                let copy = self.copy_button(
+                    format!("connect-copy-{ix}").into(),
+                    t(s.copy_label),
+                    s.text.clone(),
+                    cx,
+                );
+                // 低强调的展开切换:片段默认收起,想核对再看
+                let toggle = Button::new(SharedString::from(format!("connect-show-{ix}")))
+                    .custom(
+                        ButtonCustomVariant::new(cx)
+                            .color(theme.transparent)
+                            .foreground(theme.muted_foreground)
+                            .hover(theme.secondary_hover)
+                            .active(theme.popover),
+                    )
+                    .small()
+                    .rounded(RADIUS_BUTTON)
+                    .icon(
+                        icon(if shown {
+                            "icons/chevron-down.svg"
+                        } else {
+                            "icons/chevron-right.svg"
+                        })
+                        .with_size(px(13.)),
+                    )
+                    .label(if shown { t("Hide") } else { t("Show") })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.connect_shown.remove(&ix) {
+                            this.connect_shown.insert(ix);
+                        }
+                        cx.notify();
+                    }));
+                v_flex()
+                    .w_full()
+                    .when(ix + 1 < count, |this| {
+                        this.border_b_1().border_color(theme.border)
+                    })
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .min_h(px(52.))
+                            .px(SPACE_LG)
+                            .py(SPACE_SM)
+                            .gap(SPACE_MD)
+                            .items_center()
+                            .child(img(s.agent.brand_icon(dark)).size(px(17.)).flex_shrink_0())
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_size(FONT_BODY)
+                                            .text_color(theme.foreground)
+                                            .child(s.client),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(FONT_CAPTION)
+                                            .text_color(theme.muted_foreground)
+                                            .child(t(s.hint)),
+                                    ),
+                            )
+                            .child(toggle)
+                            .child(copy),
+                    )
+                    .when(shown, |this| {
+                        // 默认收起,所以行元素只在展开时才建
+                        let lines = s
+                            .text
+                            .lines()
+                            .map(|l| div().child(l.to_string()).into_any_element());
+                        this.child(
+                            // 左缘对齐到文字轴:行内边距 + 图标 17 + 间距 12
+                            v_flex()
+                                .ml(SPACE_LG + px(17.) + SPACE_MD)
+                                .mr(SPACE_LG)
+                                .mb(SPACE_MD)
+                                .px(SPACE_MD)
+                                .py(SPACE_SM)
+                                .rounded(theme.radius)
+                                .bg(theme.secondary)
+                                .font_family(mono.clone())
+                                .text_size(FONT_CAPTION)
+                                .text_color(theme.foreground)
+                                .children(lines),
+                        )
+                    })
+                    .into_any_element()
+            })
+            .collect();
+
+        // 信息卡里那条 mono 副信息;exists=false 再补一句红字
+        let mono_details = |display: SharedString, exists: bool| {
+            let mut out = vec![div()
+                .w_full()
+                .truncate()
+                .text_size(FONT_CAPTION)
+                .font_family(mono.clone())
+                .text_color(theme.muted_foreground)
+                .child(display)
+                .into_any_element()];
+            if !exists {
+                out.push(
+                    div()
+                        .text_size(FONT_CAPTION)
+                        .text_color(theme.danger)
+                        .child(t("Not found next to the Wake app — reinstall Wake"))
+                        .into_any_element(),
+                );
+            }
+            out
+        };
+        // wake-mcp 与 wake-cli 的卡完全同构,只差名字、路径与按钮 id
+        let binary_card = |primary: &'static str,
+                           id: &'static str,
+                           f: &BinaryFacts,
+                           extra: Option<AnyElement>| {
+            settings_info_card(
+                primary,
+                mono_details(f.display.clone(), f.exists),
+                // Copy path 恒在最右,两张卡的同名动作才对得齐;附加动作放它左边
+                h_flex()
+                    .flex_shrink_0()
+                    .gap(SPACE_SM)
+                    .items_center()
+                    .children(extra)
+                    .child(self.copy_button(id.into(), t("Copy path"), f.path.clone(), cx))
+                    .into_any_element(),
+                px(84.),
+                cx,
+            )
+        };
+        let copy_cli_command = info.cli_path_command.clone().map(|cmd| {
+            self.copy_button(
+                "connect-copy-cli-command".into(),
+                t("Copy command"),
+                cmd,
+                cx,
+            )
+            .into_any_element()
+        });
+        let skill_card = settings_info_card(
+            t("Wake skill"),
+            mono_details(wake_core::cli::SKILL_INSTALL.into(), true),
+            self.copy_button(
+                "connect-copy-skill".into(),
+                t("Copy command"),
+                wake_core::cli::SKILL_INSTALL.to_string(),
+                cx,
+            )
+            .into_any_element(),
+            px(84.),
+            cx,
+        );
+
+        let section = |label: &'static str| {
+            div()
+                .flex_shrink_0()
+                .text_size(FONT_CAPTION)
+                .font_semibold()
+                .text_color(theme.foreground)
+                .child(label)
+        };
+        // 区块标题右侧的文档链接:MCP 面与命令行面各链自己那份,页尾只放一条
+        // 会让读 CLI 那半页的人点进 MCP 的参考里。设置窗里不放文档,所以这页
+        // 只有状态、动作与这两个去处,没有解释性的散文(用户 2026-09-11 定)
+        let titled = |label: &'static str, guide: Option<(&'static str, &'static str)>| {
+            h_flex()
+                .flex_shrink_0()
+                .gap(SPACE_SM)
+                .items_center()
+                .child(section(label).flex_1())
+                .children(guide.map(|(id, url)| {
+                    div()
+                        .id(id)
+                        .cursor_pointer()
+                        .flex_shrink_0()
+                        .text_size(FONT_CAPTION)
+                        .text_color(theme.primary)
+                        .on_click(move |_, _, cx| cx.open_url(url))
+                        .child(t("Setup guide"))
+                }))
+        };
+
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .bg(theme.background)
+            .child(settings_page_header(
+                t("Connect"),
+                t("Let your coding agents look up your past sessions from Wake."),
+                cx,
+            ))
+            .child(
+                v_flex()
+                    .id("settings-connect-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px(SPACE_XXL)
+                    .pb(SPACE_XXL)
+                    .gap(SPACE_SM)
+                    // 四个区块同一种写法,有没有文档链接写在参数里,不靠两种拼法
+                    // 区分。规则一句话:**每个面的第一个区块挂自己的文档**——
+                    // MCP 面 = MCP server + MCP clients,命令行面 = Command line
+                    // + Skill,所以链接落在第一、第三块上。第五个区块该不该有
+                    // 链接,照这条判就行,不用再拍脑袋
+                    .child(titled(
+                        t("MCP server"),
+                        Some(("connect-setup-guide", CONNECT_GUIDE_URL)),
+                    ))
+                    .child(binary_card(
+                        "wake-mcp",
+                        "connect-copy-path",
+                        &info.mcp,
+                        None,
+                    ))
+                    .child(titled(t("MCP clients"), None).pt(SPACE_LG))
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .flex_shrink_0()
+                            .overflow_hidden()
+                            .rounded(theme.radius_lg)
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.popover)
+                            .children(agent_rows),
+                    )
+                    .child(
+                        titled(
+                            t("Command line"),
+                            Some(("connect-cli-setup-guide", CONNECT_CLI_GUIDE_URL)),
+                        )
+                        .pt(SPACE_LG),
+                    )
+                    .child(binary_card(
+                        "wake-cli",
+                        "connect-copy-cli-path",
+                        &info.cli,
+                        copy_cli_command,
+                    ))
+                    .child(titled(t("Skill"), None).pt(SPACE_LG))
+                    .child(skill_card),
+            )
+            .into_any_element()
+    }
+
+    fn about_link(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        url: &'static str,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        div()
+            .id(id)
+            .cursor_pointer()
+            .text_size(FONT_LABEL)
+            .font_family(theme.mono_font_family.clone())
+            .text_color(theme.foreground)
+            .hover(|style| style.text_decoration_1())
+            .on_click(move |_, _, cx| cx.open_url(url))
+            .child(label)
+            .into_any_element()
+    }
+
+    /// 与 Kooky / Birth 的 About 面板使用同一信息层级，但落在 Wake 已有的
+    /// Settings 场景内：产品图标、名称、版本、tagline、仓库和作者署名。
+    fn render_about(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let faint = theme.muted_foreground.opacity(0.72);
+        let version: SharedString = crate::tf!("Version {}", env!("CARGO_PKG_VERSION")).into();
+
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .items_center()
+            .bg(theme.background)
+            .child(
+                v_flex()
+                    .w(px(360.))
+                    .items_center()
+                    .pt(px(52.))
+                    .child(
+                        img("brands/wake.svg")
+                            .size(px(78.))
+                            .flex_shrink_0()
+                            .mb(SPACE_MD),
+                    )
+                    .child(
+                        div()
+                            .text_size(FONT_DISPLAY)
+                            .font_medium()
+                            .text_color(theme.foreground)
+                            .child("Wake"),
+                    )
+                    .child(
+                        div()
+                            .mt(SPACE_XS)
+                            .text_size(FONT_LABEL)
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(theme.muted_foreground)
+                            .child(version),
+                    )
+                    .child(
+                        div()
+                            .mt(SPACE_MD)
+                            .text_size(FONT_CAPTION)
+                            .text_color(theme.muted_foreground)
+                            .child(t("All your AI agent sessions, in one place.")),
+                    )
+                    .child(div().mt(px(14.)).child(self.about_link(
+                        "about-github",
+                        "GitHub ↗",
+                        "https://github.com/iAmCorey/Wake",
+                        cx,
+                    )))
+                    .child(div().w(px(32.)).h(px(1.)).my(SPACE_LG).bg(theme.border))
+                    .child(
+                        div()
+                            .text_size(FONT_LABEL)
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(faint)
+                            .child(t("© 2026 Corey Chiu · MIT License")),
+                    )
+                    .child(
+                        h_flex()
+                            .mt(SPACE_XS)
+                            .text_size(FONT_LABEL)
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(faint)
+                            .child(t("Built with ❤️ by "))
+                            .child(self.about_link(
+                                "about-author",
+                                "Corey Chiu",
+                                "https://coreychiu.com?utm_source=wake",
+                                cx,
+                            )),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_updates(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let status = self.workbench.read(cx).update_status().clone();
+        let checking = matches!(status, UpdateStatus::Checking);
+        let update_available = matches!(status, UpdateStatus::Available { .. });
+        let status_message: SharedString = match &status {
+            UpdateStatus::Idle => t("Check GitHub Releases for a newer version.").into(),
+            UpdateStatus::Checking => t("Checking GitHub Releases…").into(),
+            UpdateStatus::UpToDate { latest } => {
+                crate::tf!("No newer release is available (latest: {}).", latest).into()
+            }
+            UpdateStatus::Available { latest } => crate::tf!(
+                "Wake {} is available. Open the release page to download it.",
+                latest
+            )
+            .into(),
+            UpdateStatus::Failed => {
+                t("Couldn't check for updates. Check your connection and try again.").into()
+            }
+        };
+        let button_label = match status {
+            UpdateStatus::Idle => t("Check for Updates"),
+            UpdateStatus::Checking => t("Checking…"),
+            UpdateStatus::UpToDate { .. } => t("Check Again"),
+            UpdateStatus::Available { .. } => t("View Update"),
+            UpdateStatus::Failed => t("Try Again"),
+        };
+        let button = Button::new("settings-check-updates")
+            .label(button_label)
+            .disabled(checking);
+        let mut action = if update_available {
+            settings_primary_button(button, cx)
+        } else {
+            settings_button(button, cx)
+        };
+        if update_available {
+            action = action.on_click(|_, _, cx| cx.open_url(update::LATEST_RELEASE_PAGE));
+        } else {
+            let workbench = self.workbench.clone();
+            action = action.on_click(move |_, _, cx| {
+                workbench.update(cx, |this, cx| this.check_for_updates(cx));
+            });
+        }
+
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .bg(theme.background)
+            .child(
+                v_flex()
+                    .flex_shrink_0()
+                    .px(SPACE_XXL)
+                    .pt(SETTINGS_PAGE_TOP)
+                    .pb(SPACE_XL)
+                    .gap(px(5.))
+                    .child(
+                        div()
+                            .text_size(FONT_TITLE)
+                            .font_semibold()
+                            .text_color(theme.foreground)
+                            .child(t("Updates")),
+                    )
+                    .child(
+                        div()
+                            .text_size(FONT_CAPTION)
+                            .text_color(theme.muted_foreground)
+                            .child(t("Keep Wake up to date.")),
+                    ),
+            )
+            .child(
+                v_flex().px(SPACE_XXL).child(
+                    h_flex()
+                        .min_h(px(84.))
+                        .w_full()
+                        .px(SPACE_LG)
+                        .gap(SPACE_LG)
+                        .items_center()
+                        .rounded(theme.radius_lg)
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.popover)
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap(px(3.))
+                                .child(
+                                    div()
+                                        .text_size(FONT_BODY)
+                                        .text_color(theme.foreground)
+                                        .child(format!("Wake {}", env!("CARGO_PKG_VERSION"))),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(FONT_CAPTION)
+                                        .text_color(if matches!(status, UpdateStatus::Failed) {
+                                            theme.danger
+                                        } else {
+                                            theme.muted_foreground
+                                        })
+                                        .child(status_message),
+                                ),
+                        )
+                        .child(action),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn render_location_row(&self, row: DataSourceRow, ix: usize, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let enabled = row.enabled;
+        let exists = row.exists;
+        let raw = row.raw.clone();
+
+        let edit_workbench = self.workbench.clone();
+        let edit_row = row.clone();
+        let reveal_path = row.raw.clone();
+        let remove_target = row.custom.clone();
+        let remove_agent = row.agent;
+        let menu = Button::new(("settings-location-menu", ix))
+            .ghost()
+            .small()
+            .rounded(RADIUS_BUTTON)
+            .icon(icon("icons/more-horizontal.svg").with_size(px(14.)))
+            .dropdown_menu(move |menu, _, _| {
+                let workbench = edit_workbench.clone();
+                let edit_row = edit_row.clone();
+                let mut menu = menu
+                    .min_w(px(180.))
+                    .item(
+                        PopupMenuItem::new(t("Edit…")).on_click(move |_, window, cx| {
+                            let row = edit_row.clone();
+                            workbench.update(cx, |this, cx| {
+                                this.open_edit_location_form(row, window, cx)
+                            });
+                        }),
+                    );
+                if exists {
+                    let path = reveal_path.clone();
+                    menu = menu.item(PopupMenuItem::new(show_in_fm()).on_click(move |_, _, _| {
+                        wake_core::services::terminal::open_in_file_manager(path.as_ref())
+                    }));
+                }
+                if let Some(stored) = remove_target.clone() {
+                    let workbench = edit_workbench.clone();
+                    menu = menu
+                        .separator()
+                        .item(
+                            PopupMenuItem::new(t("Remove")).on_click(move |_, window, cx| {
+                                let stored = stored.clone();
+                                workbench.update(cx, |this, cx| {
+                                    this.delete_location(remove_agent, stored, window, cx)
+                                });
+                            }),
+                        );
+                }
+                menu
+            });
+
+        let toggle_workbench = self.workbench.clone();
+        let toggle_path = raw;
+        let toggle_agent = row.agent;
+        h_flex()
+            .id(("settings-location-row", ix))
+            .min_h(px(60.))
+            .w_full()
+            .px(SPACE_LG)
+            .gap(SPACE_MD)
+            .items_center()
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .w_full()
+                            .truncate()
+                            .text_size(FONT_BODY)
+                            .text_color(if enabled {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .child(row.display),
+                    )
+                    .child(
+                        div()
+                            .text_size(FONT_CAPTION)
+                            .text_color(if !enabled || exists {
+                                theme.muted_foreground
+                            } else {
+                                theme.warning
+                            })
+                            .child(row.tally),
+                    ),
+            )
+            .child(menu)
+            .child(
+                Switch::new(("settings-location-enabled", ix))
+                    .checked(enabled)
+                    .small()
+                    .tooltip(if enabled {
+                        t("Disable location")
+                    } else {
+                        t("Enable location")
+                    })
+                    .on_click(move |enabled, window, cx| {
+                        let path = toggle_path.clone();
+                        toggle_workbench.update(cx, |this, cx| {
+                            this.set_location_enabled(toggle_agent, path, *enabled, window, cx)
+                        });
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn render_agent_group(
+        &self,
+        agent: AgentId,
+        rows: Vec<DataSourceRow>,
+        row_offset: usize,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let dark = theme.mode.is_dark();
+        v_flex()
+            .gap(SPACE_SM)
+            .child(
+                h_flex()
+                    .h(px(24.))
+                    .gap(SPACE_SM)
+                    .items_center()
+                    .child(img(agent.brand_icon(dark)).size(px(17.)).flex_shrink_0())
+                    .child(
+                        div()
+                            .text_size(FONT_CAPTION)
+                            .font_semibold()
+                            .text_color(theme.foreground)
+                            .child(agent.display_name()),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .rounded(theme.radius_lg)
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.popover)
+                    .children(rows.into_iter().enumerate().map(|(ix, row)| {
+                        div()
+                            .w_full()
+                            .when(ix > 0, |this| this.border_t_1().border_color(theme.border))
+                            .child(self.render_location_row(row, row_offset + ix, cx))
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn render_locations(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let snapshot = self.workbench.read(cx).location_settings_snapshot();
+        let mut groups: Vec<(AgentId, Vec<DataSourceRow>)> = Vec::new();
+        for row in snapshot.rows {
+            match groups.last_mut() {
+                Some((agent, rows)) if *agent == row.agent => rows.push(row),
+                _ => groups.push((row.agent, vec![row])),
+            }
+        }
+        let (available, unavailable): (Vec<_>, Vec<_>) = groups
+            .into_iter()
+            .partition(|(_, rows)| rows.iter().any(|row| row.exists || row.custom.is_some()));
+        let unavailable_count = unavailable.len();
+        let add_workbench = self.workbench.clone();
+        let restore_workbench = self.workbench.clone();
+        let diverged = snapshot.diverged;
+
+        let mut row_offset = 0usize;
+        let available_elements: Vec<AnyElement> = available
+            .into_iter()
+            .map(|(agent, rows)| {
+                let start = row_offset;
+                row_offset += rows.len();
+                self.render_agent_group(agent, rows, start, cx)
+            })
+            .collect();
+        let unavailable_elements: Vec<AnyElement> = if self.show_unavailable {
+            unavailable
+                .into_iter()
+                .map(|(agent, rows)| {
+                    let start = row_offset;
+                    row_offset += rows.len();
+                    self.render_agent_group(agent, rows, start, cx)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .bg(theme.background)
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .px(SPACE_XXL)
+                    .pt(SETTINGS_PAGE_TOP)
+                    .pb(SPACE_XL)
+                    .gap(SPACE_LG)
+                    .items_start()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(5.))
+                            .child(
+                                div()
+                                    .text_size(FONT_TITLE)
+                                    .font_semibold()
+                                    .text_color(theme.foreground)
+                                    .child(t("Session locations")),
+                            )
+                            .child(
+                                div()
+                                    .text_size(FONT_CAPTION)
+                                    .text_color(theme.muted_foreground)
+                                    .child(t("Choose where Wake looks for local agent sessions.")),
+                            ),
+                    )
+                    .child(
+                        settings_button(
+                            Button::new("settings-add-location")
+                                .icon(icon("icons/plus.svg").with_size(px(13.)))
+                                .label(t("Add location")),
+                            cx,
+                        )
+                        .on_click(move |_, window, cx| {
+                            add_workbench
+                                .update(cx, |this, cx| this.open_add_location_form(window, cx));
+                        }),
+                    )
+                    .child(
+                        Button::new("settings-location-more")
+                            .ghost()
+                            .small()
+                            .rounded(RADIUS_BUTTON)
+                            .icon(icon("icons/more-horizontal.svg").with_size(px(14.)))
+                            .dropdown_menu(move |menu, _, _| {
+                                let workbench = restore_workbench.clone();
+                                menu.min_w(px(180.)).item(
+                                    PopupMenuItem::new(t("Restore defaults"))
+                                        .disabled(!diverged)
+                                        .on_click(move |_, window, cx| {
+                                            workbench.update(cx, |this, cx| {
+                                                this.restore_default_locations(window, cx)
+                                            });
+                                        }),
+                                )
+                            }),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .id("settings-location-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px(SPACE_XXL)
+                    .pb(px(40.))
+                    .gap(SPACE_XL)
+                    .children(available_elements)
+                    .when(unavailable_count > 0, |this| {
+                        this.child(
+                            v_flex()
+                                .gap(SPACE_LG)
+                                .child(
+                                    h_flex()
+                                        .id("settings-unavailable-locations")
+                                        .h(px(36.))
+                                        .w_full()
+                                        .pr(SPACE_SM)
+                                        .gap(SPACE_SM)
+                                        .items_center()
+                                        .rounded(theme.radius)
+                                        .cursor_pointer()
+                                        .text_color(theme.muted_foreground)
+                                        .hover(|style| style.bg(theme.secondary_hover))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.show_unavailable = !this.show_unavailable;
+                                            cx.notify();
+                                        }))
+                                        .child(
+                                            div()
+                                                .w(px(17.))
+                                                .flex_shrink_0()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .child(
+                                                    icon(if self.show_unavailable {
+                                                        "icons/chevron-down.svg"
+                                                    } else {
+                                                        "icons/chevron-right.svg"
+                                                    })
+                                                    .with_size(px(13.)),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .text_size(FONT_CAPTION)
+                                                .font_medium()
+                                                .child(t("Not detected")),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(FONT_LABEL)
+                                                .child(unavailable_count.to_string()),
+                                        ),
+                                )
+                                .children(unavailable_elements),
+                        )
+                    }),
+            )
+    }
+
+    /// Settings → Remote hosts:SSH 会话聚合(阶段 1:只读镜像)。版式与
+    /// Locations 页同一套:标题 + 说明,右侧低强调的 Sync now / Add host;host
+    /// 列表是一张 popover 底的圆角卡,一行一台——名字为主信息、同步状态为
+    /// muted 副信息(失败用 danger),`…` 菜单集中 Sync now / Remove,最右是
+    /// 开关;添加走与 location 同材质的表单弹窗(2026-09-03 用户要求统一)。
+    /// Agent access 改动即落盘;失败时弹窗(隐私文件写不了是要紧事)
+    fn auth_field_changed(
+        &mut self,
+        agent: AgentId,
+        field: AuthField,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entry = self.auth.entry(agent.as_str().to_string()).or_default();
+        match field {
+            AuthField::Key => entry.api_key = value,
+            AuthField::Base => entry.base_url = value,
+            AuthField::Extra => entry.extra_env = value,
+        }
+        if let Err(error) = crate::agent_auth::save(&self.auth) {
+            window.push_notification(
+                gpui_component::notification::Notification::error(crate::tf!(
+                    "Couldn't save agent access: {}",
+                    error
+                )),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    fn render_agent_access(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let cards: Vec<AnyElement> = self
+            .auth_rows
+            .iter()
+            .map(|row| {
+                let dialect =
+                    wake_core::services::acp::acp_dialect(row.agent).expect("filtered");
+                let dot = rgb(agent_series_color(row.agent));
+                let mut card = v_flex()
+                    .w_full()
+                    // 同 Remote hosts:滚动列里 overflow 卡必须 flex_shrink_0
+                    .flex_shrink_0()
+                    .overflow_hidden()
+                    .rounded(theme.radius_lg)
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.popover)
+                    .child(
+                        v_flex()
+                            .px(SPACE_LG)
+                            .pt(SPACE_MD)
+                            .pb(SPACE_SM)
+                            .gap(px(3.))
+                            .child(
+                                h_flex()
+                                    .gap(SPACE_SM)
+                                    .items_center()
+                                    .child(div().size(px(8.)).rounded_full().bg(dot))
+                                    .child(
+                                        div()
+                                            .text_size(FONT_BODY)
+                                            .font_medium()
+                                            .child(row.agent.display_name()),
+                                    ),
+                            )
+                            // 登录制 agent 的 CLI 指引(wake-core 字面量,
+                            // i18n 测试经 dialect 表棘轮盯着)
+                            .when_some(dialect.auth_hint, |this, hint| {
+                                this.child(
+                                    div()
+                                        .text_size(FONT_CAPTION)
+                                        .text_color(theme.muted_foreground)
+                                        .child(t(hint)),
+                                )
+                            }),
+                    );
+                if let Some(key) = &row.key {
+                    card = card.child(self.auth_field_row(t("API key"), key.clone(), cx));
+                }
+                if let Some(base) = &row.base {
+                    card = card
+                        .child(self.auth_field_row(t("API endpoint (optional)"), base.clone(), cx));
+                }
+                card = card.child(
+                    v_flex()
+                        .px(SPACE_LG)
+                        .pb(SPACE_MD)
+                        .gap(SPACE_SM)
+                        .child(
+                            div()
+                                .text_size(FONT_CAPTION)
+                                .text_color(theme.muted_foreground)
+                                .child(t("Extra environment — one NAME=VALUE per line")),
+                        )
+                        .child(Textarea::new(&row.extra)),
+                );
+                card.into_any_element()
+            })
+            .collect();
+
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .bg(theme.background)
+            .child(
+                v_flex()
+                    .flex_shrink_0()
+                    .px(SPACE_XXL)
+                    .pt(SETTINGS_PAGE_TOP)
+                    .pb(SPACE_XL)
+                    .gap(px(5.))
+                    .child(
+                        div()
+                            .text_size(FONT_TITLE)
+                            .font_semibold()
+                            .text_color(theme.foreground)
+                            .child(t("Agent access")),
+                    )
+                    .child(
+                        div()
+                            .text_size(FONT_CAPTION)
+                            .text_color(theme.muted_foreground)
+                            .child(t(
+                                "Credentials for in-app chat. Keys stay on this machine and are passed to the agent process as environment variables — Wake never touches the agents' own credential stores.",
+                            )),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .id("settings-agent-access")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px(SPACE_XXL)
+                    .pb(px(40.))
+                    .gap(SPACE_XL)
+                    .when(cards.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .text_size(FONT_CAPTION)
+                                .text_color(theme.muted_foreground)
+                                .child(t(
+                                    "Install an ACP-capable agent CLI (kimi, opencode, cursor-agent, gemini) to configure access.",
+                                )),
+                        )
+                    })
+                    .children(cards),
+            )
+            .into_any_element()
+    }
+
+    fn auth_field_row(
+        &self,
+        label: &'static str,
+        input: Entity<InputState>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        v_flex()
+            .px(SPACE_LG)
+            .pb(SPACE_MD)
+            .gap(SPACE_SM)
+            .child(
+                div()
+                    .text_size(FONT_CAPTION)
+                    .text_color(theme.muted_foreground)
+                    .child(label),
+            )
+            .child(div().max_w(px(420.)).child(Input::new(&input)))
+            .into_any_element()
+    }
+
+    fn render_remotes(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let rows = self.workbench.read(cx).remote_hosts_snapshot();
+        let syncing = self.workbench.read(cx).remote_sync_in_progress();
+        let sync_workbench = self.workbench.clone();
+        let add_workbench = self.workbench.clone();
+        let has_hosts = !rows.is_empty();
+
+        let row_elements: Vec<AnyElement> = rows
+            .into_iter()
+            .enumerate()
+            .map(|(ix, row)| {
+                let menu_workbench = self.workbench.clone();
+                let toggle_workbench = self.workbench.clone();
+                let menu_name = row.name.clone();
+                let toggle_name = row.name.clone();
+                let enabled = row.enabled;
+                let menu = Button::new(("settings-remote-host-menu", ix))
+                    .ghost()
+                    .small()
+                    .rounded(RADIUS_BUTTON)
+                    .icon(icon("icons/more-horizontal.svg").with_size(px(14.)))
+                    .dropdown_menu(move |menu, _, _| {
+                        let sync_workbench = menu_workbench.clone();
+                        let sync_name = menu_name.clone();
+                        let remove_workbench = menu_workbench.clone();
+                        let remove_name = menu_name.clone();
+                        menu.min_w(px(180.))
+                            .item(
+                                PopupMenuItem::new(t("Sync now"))
+                                    .disabled(syncing || !enabled)
+                                    .on_click(move |_, _, cx| {
+                                        let name = sync_name.to_string();
+                                        sync_workbench.update(cx, |this, cx| {
+                                            this.spawn_remote_sync(vec![name], cx)
+                                        });
+                                    }),
+                            )
+                            .separator()
+                            .item(
+                                PopupMenuItem::new(t("Remove")).on_click(move |_, window, cx| {
+                                    let name = remove_name.clone();
+                                    remove_workbench.update(cx, |this, cx| {
+                                        this.confirm_remove_remote_host(name, window, cx)
+                                    });
+                                }),
+                            )
+                    });
+                div()
+                    .w_full()
+                    .when(ix > 0, |this| this.border_t_1().border_color(theme.border))
+                    .child(
+                        h_flex()
+                            .id(("settings-remote-host-row", ix))
+                            .min_h(px(60.))
+                            .w_full()
+                            .px(SPACE_LG)
+                            .gap(SPACE_MD)
+                            .items_center()
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap(px(3.))
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .truncate()
+                                            .text_size(FONT_BODY)
+                                            .text_color(if enabled {
+                                                theme.foreground
+                                            } else {
+                                                theme.muted_foreground
+                                            })
+                                            .child(row.name.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .truncate()
+                                            .text_size(FONT_CAPTION)
+                                            .text_color(if row.failed && enabled {
+                                                theme.danger
+                                            } else {
+                                                theme.muted_foreground
+                                            })
+                                            .child(row.status.clone()),
+                                    ),
+                            )
+                            .child(menu)
+                            .child(
+                                Switch::new(("settings-remote-host-enabled", ix))
+                                    .checked(enabled)
+                                    .small()
+                                    .tooltip(if enabled {
+                                        t("Disable host")
+                                    } else {
+                                        t("Enable host")
+                                    })
+                                    .on_click(move |checked, window, cx| {
+                                        let enabled = *checked;
+                                        toggle_workbench.update(cx, |this, cx| {
+                                            this.set_remote_host_enabled(
+                                                toggle_name.as_ref(),
+                                                enabled,
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                    }),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .bg(theme.background)
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .px(SPACE_XXL)
+                    .pt(SETTINGS_PAGE_TOP)
+                    .pb(SPACE_XL)
+                    .gap(SPACE_LG)
+                    .items_start()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(5.))
+                            .child(
+                                div()
+                                    .text_size(FONT_TITLE)
+                                    .font_semibold()
+                                    .text_color(theme.foreground)
+                                    .child(t("Remote hosts")),
+                            )
+                            .child(
+                                div()
+                                    .text_size(FONT_CAPTION)
+                                    .text_color(theme.muted_foreground)
+                                    .child(
+                                        "Mirror agent sessions from other machines over SSH. \
+                                         Read-only: nothing on the remote is ever written.",
+                                    ),
+                            ),
+                    )
+                    .when(has_hosts, |this| {
+                        this.child(
+                            settings_button(
+                                Button::new("settings-sync-remotes")
+                                    .icon(icon("icons/refresh-cw.svg").with_size(px(13.)))
+                                    .label(if syncing { t("Syncing…") } else { t("Sync now") }),
+                                cx,
+                            )
+                            .disabled(syncing)
+                            .on_click(move |_, _, cx| {
+                                sync_workbench
+                                    .update(cx, |this, cx| this.sync_all_remote_hosts(cx));
+                            }),
+                        )
+                    })
+                    .child(
+                        settings_button(
+                            Button::new("settings-add-remote-host")
+                                .icon(icon("icons/plus.svg").with_size(px(13.)))
+                                .label(t("Add host")),
+                            cx,
+                        )
+                        .on_click(move |_, window, cx| {
+                            add_workbench
+                                .update(cx, |this, cx| this.open_add_remote_host_form(window, cx));
+                        }),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .id("settings-remote-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px(SPACE_XXL)
+                    .pb(px(40.))
+                    .gap(SPACE_XL)
+                    .when(has_hosts, |this| {
+                        this.child(
+                            v_flex()
+                                .w_full()
+                                // 同 Connect 页:overflow_hidden 的卡在滚动列里 min-height
+                                // 视为 0,host 一多会被压扁裁切而不是滚动
+                                .flex_shrink_0()
+                                .overflow_hidden()
+                                .rounded(theme.radius_lg)
+                                .border_1()
+                                .border_color(theme.border)
+                                .bg(theme.popover)
+                                .children(row_elements),
+                        )
+                    })
+                    .when(!has_hosts, |this| {
+                        this.child(
+                            div()
+                                .text_size(FONT_CAPTION)
+                                .text_color(theme.muted_foreground)
+                                .child(t("No remote hosts yet. Add one to mirror its sessions into Wake.")),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+}
+
+impl Focusable for SettingsView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for SettingsView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let background = cx.theme().background;
+        let foreground = cx.theme().foreground;
+        let sidebar = self.render_sidebar(window, cx);
+        let selected_page = self.workbench.read(cx).settings_page();
+        let content = match selected_page {
+            SettingsPage::General => self.render_general(cx),
+            SettingsPage::Locations => self.render_locations(cx).into_any_element(),
+            SettingsPage::Remotes => self.render_remotes(cx),
+            SettingsPage::Connect => self.render_connect(cx),
+            SettingsPage::AgentAccess => self.render_agent_access(cx),
+            SettingsPage::Providers => self.providers_page.clone().into_any_element(),
+            SettingsPage::Data => self.render_data(cx),
+            SettingsPage::Updates => self.render_updates(cx),
+            SettingsPage::About => self.render_about(cx),
+        };
+        div()
+            .id("wake-settings")
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|this, _: &OpenSettings, _window, cx| {
+                this.workbench
+                    .update(cx, |workbench, cx| workbench.open_settings(cx));
+            }))
+            .on_action(cx.listener(|this, _: &OpenAbout, _window, cx| {
+                this.workbench
+                    .update(cx, |workbench, cx| workbench.open_about(cx));
+            }))
+            .on_action(cx.listener(|this, _: &OpenUpdates, _window, cx| {
+                this.workbench
+                    .update(cx, |workbench, cx| workbench.open_updates(cx));
+            }))
+            .size_full()
+            .bg(background)
+            .text_color(foreground)
+            .child(h_flex().size_full().child(sidebar).child(content))
+            .children(overlay_layers(window, cx))
+    }
+}
