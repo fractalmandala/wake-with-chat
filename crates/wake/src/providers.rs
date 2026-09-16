@@ -62,8 +62,9 @@ fn load_path(path: &Path) -> Result<Vec<Provider>, String> {
     }
     let bytes = fs::read(path)
         .map_err(|_| "Cannot read provider storage; check its permissions.".to_string())?;
-    let providers: Vec<Provider> = serde_json::from_slice(&bytes)
-        .map_err(|_| "Provider storage is malformed; repair it before saving changes.".to_string())?;
+    let providers: Vec<Provider> = serde_json::from_slice(&bytes).map_err(|_| {
+        "Provider storage is malformed; repair it before saving changes.".to_string()
+    })?;
     validate_all(&providers, false)?;
     Ok(providers)
 }
@@ -74,17 +75,22 @@ fn save_path(path: &Path, providers: &[Provider]) -> Result<(), String> {
     load_path(path)?;
     let bytes = serde_json::to_vec_pretty(providers)
         .map_err(|_| "Cannot encode provider settings.".to_string())?;
-    let parent = path.parent().ok_or("Provider storage has no parent directory.")?;
+    let parent = path
+        .parent()
+        .ok_or("Provider storage has no parent directory.")?;
     fs::create_dir_all(parent)
         .map_err(|_| "Cannot create the provider storage directory.".to_string())?;
-    let (temporary, mut file) = create_temporary(parent)
-        .map_err(|_| "Cannot create private provider storage; check directory permissions.".to_string())?;
+    let (temporary, mut file) = create_temporary(parent).map_err(|_| {
+        "Cannot create private provider storage; check directory permissions.".to_string()
+    })?;
     let written = file.write_all(&bytes).and_then(|_| file.sync_all());
     drop(file);
     let result = written.and_then(|_| fs::rename(&temporary, path));
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
-        return Err("Cannot save provider settings atomically; previous settings were retained.".into());
+        return Err(
+            "Cannot save provider settings atomically; previous settings were retained.".into(),
+        );
     }
     Ok(())
 }
@@ -105,7 +111,11 @@ fn create_temporary(parent: &Path) -> io::Result<(PathBuf, File)> {
 #[cfg(unix)]
 fn private_file(path: &Path) -> io::Result<File> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
     // Set the exact mode before writing, even with an unusually restrictive umask.
     if let Err(error) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
         drop(file);
@@ -128,14 +138,23 @@ fn private_file(path: &Path) -> io::Result<File> {
     #[link(name = "advapi32")]
     extern "system" {
         fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            text: *const u16, revision: u32, descriptor: *mut *mut c_void, size: *mut u32,
+            text: *const u16,
+            revision: u32,
+            descriptor: *mut *mut c_void,
+            size: *mut u32,
         ) -> i32;
     }
     #[link(name = "kernel32")]
     extern "system" {
-        fn CreateFileW(name: *const u16, access: u32, share: u32,
-            security: *const SecurityAttributes, disposition: u32, flags: u32,
-            template: *mut c_void) -> *mut c_void;
+        fn CreateFileW(
+            name: *const u16,
+            access: u32,
+            share: u32,
+            security: *const SecurityAttributes,
+            disposition: u32,
+            flags: u32,
+            template: *mut c_void,
+        ) -> *mut c_void;
         fn LocalFree(memory: *mut c_void) -> *mut c_void;
     }
     let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -147,15 +166,29 @@ fn private_file(path: &Path) -> io::Result<File> {
     let mut descriptor = std::ptr::null_mut();
     unsafe {
         if ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            sddl.as_ptr(), 1, &mut descriptor, std::ptr::null_mut(),
-        ) == 0 {
+            sddl.as_ptr(),
+            1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        ) == 0
+        {
             return Err(io::Error::last_os_error());
         }
         let security = SecurityAttributes {
-            length: std::mem::size_of::<SecurityAttributes>() as u32, descriptor, inherit: 0,
+            length: std::mem::size_of::<SecurityAttributes>() as u32,
+            descriptor,
+            inherit: 0,
         };
         // GENERIC_WRITE, no sharing, CREATE_NEW, FILE_ATTRIBUTE_NORMAL.
-        let handle = CreateFileW(name.as_ptr(), 0x40000000, 0, &security, 1, 0x80, std::ptr::null_mut());
+        let handle = CreateFileW(
+            name.as_ptr(),
+            0x40000000,
+            0,
+            &security,
+            1,
+            0x80,
+            std::ptr::null_mut(),
+        );
         let error = io::Error::last_os_error();
         LocalFree(descriptor);
         if handle as isize == -1 {
@@ -168,19 +201,28 @@ fn private_file(path: &Path) -> io::Result<File> {
 
 #[cfg(not(any(unix, windows)))]
 fn private_file(_: &Path) -> io::Result<File> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "Private storage is unsupported."))
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Private storage is unsupported.",
+    ))
 }
 
 fn base_url(provider: &Provider) -> Result<Url, String> {
     let text = provider.base_url.trim().trim_end_matches('/');
     let invalid = "Use an HTTP(S) API base URL without credentials, query, or fragment.";
     let url = Url::parse(text).map_err(|_| invalid.to_string())?;
-    let authority = text.split_once("://").map(|(_, rest)| rest.split('/').next().unwrap_or(""));
-    if !matches!(url.scheme(), "http" | "https") || url.host().is_none()
-        || !url.username().is_empty() || url.password().is_some()
-        || url.query().is_some() || url.fragment().is_some()
+    let authority = text
+        .split_once("://")
+        .map(|(_, rest)| rest.split('/').next().unwrap_or(""));
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
         || authority.is_none_or(|value| value.contains('@'))
-        || text.contains('\\') || text.chars().any(char::is_control)
+        || text.contains('\\')
+        || text.chars().any(char::is_control)
     {
         return Err(invalid.into());
     }
@@ -191,7 +233,9 @@ fn base_url(provider: &Provider) -> Result<Url, String> {
         _ => false,
     };
     if url.scheme() == "http" && !loopback {
-        return Err("Use HTTPS for remote providers; HTTP is allowed only on loopback hosts.".into());
+        return Err(
+            "Use HTTPS for remote providers; HTTP is allowed only on loopback hosts.".into(),
+        );
     }
     Ok(url)
 }
@@ -199,8 +243,9 @@ fn base_url(provider: &Provider) -> Result<Url, String> {
 fn header_value(value: &str) -> Result<HeaderValue, String> {
     let value = HeaderValue::from_str(value)
         .map_err(|_| "API keys and header values must be valid HTTP header text.".to_string())?;
-    value.to_str()
-        .map_err(|_| "API keys and header values must contain only HTTP header text.".to_string())?;
+    value.to_str().map_err(|_| {
+        "API keys and header values must contain only HTTP header text.".to_string()
+    })?;
     Ok(value)
 }
 
@@ -216,10 +261,23 @@ fn request_headers(provider: &Provider) -> Result<HeaderMap, String> {
     for header in &provider.headers {
         let name = HeaderName::from_bytes(header.name.as_bytes())
             .map_err(|_| "Each custom header needs a valid HTTP header name.".to_string())?;
-        if matches!(name.as_str(), "host" | "content-length" | "transfer-encoding" | "connection"
-            | "upgrade" | "keep-alive" | "proxy-authorization" | "proxy-authenticate" | "proxy-connection" | "te"
-            | "trailer" | "expect" | "accept-encoding" | "content-encoding")
-        {
+        if matches!(
+            name.as_str(),
+            "host"
+                | "content-length"
+                | "transfer-encoding"
+                | "connection"
+                | "upgrade"
+                | "keep-alive"
+                | "proxy-authorization"
+                | "proxy-authenticate"
+                | "proxy-connection"
+                | "te"
+                | "trailer"
+                | "expect"
+                | "accept-encoding"
+                | "content-encoding"
+        ) {
             return Err("Custom headers cannot override HTTP transport or proxy headers.".into());
         }
         if !names.insert(name.clone()) {
@@ -234,10 +292,16 @@ fn request_headers(provider: &Provider) -> Result<HeaderMap, String> {
 
 /// The caller removes wholly blank UI rows. Empty model names fall back to their IDs.
 pub fn validate(provider: &Provider, require_models: bool) -> Result<(), String> {
-    if provider.id.is_empty() || provider.id.len() > 64
-        || !provider.id.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_-".contains(&c))
+    if provider.id.is_empty()
+        || provider.id.len() > 64
+        || !provider
+            .id
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_-".contains(&c))
     {
-        return Err("Provider ID must be 1–64 lowercase letters, digits, underscores, or hyphens.".into());
+        return Err(
+            "Provider ID must be 1–64 lowercase letters, digits, underscores, or hyphens.".into(),
+        );
     }
     if provider.name.trim().is_empty() {
         return Err("A provider name is required.".into());
@@ -254,7 +318,9 @@ pub fn validate(provider: &Provider, require_models: bool) -> Result<(), String>
         }
     }
     if require_models && provider.models.is_empty() {
-        return Err("Add or discover at least one model before using this provider in OpenCode.".into());
+        return Err(
+            "Add or discover at least one model before using this provider in OpenCode.".into(),
+        );
     }
     Ok(())
 }
@@ -271,7 +337,11 @@ fn validate_all(providers: &[Provider], require_models: bool) -> Result<(), Stri
 }
 
 fn display_name<'a>(name: &'a str, id: &'a str) -> &'a str {
-    if name.trim().is_empty() { id } else { name }
+    if name.trim().is_empty() {
+        id
+    } else {
+        name
+    }
 }
 
 /// Blocking: call on a dedicated worker thread, never inside a Tokio/GPUI runtime.
@@ -284,14 +354,26 @@ pub fn discover_models(provider: &Provider) -> Result<Vec<ProviderModel>, String
         .timeout(Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::none());
     // Plain HTTP is loopback-only; never forward its credentials to a system proxy.
-    let builder = if url.scheme() == "http" { builder.no_proxy() } else { builder };
-    let client = builder.build()
+    let builder = if url.scheme() == "http" {
+        builder.no_proxy()
+    } else {
+        builder
+    };
+    let client = builder
+        .build()
         .map_err(|_| "Cannot initialize the provider HTTP client.".to_string())?;
-    let response = client.get(url).headers(request_headers(provider)?)
-        .send().map_err(|error| if error.is_timeout() {
-            "Model discovery timed out after 15 seconds; check the endpoint and retry.".to_string()
-        } else {
-            "Cannot reach the provider; check its base URL, TLS certificate, and network.".to_string()
+    let response = client
+        .get(url)
+        .headers(request_headers(provider)?)
+        .send()
+        .map_err(|error| {
+            if error.is_timeout() {
+                "Model discovery timed out after 15 seconds; check the endpoint and retry."
+                    .to_string()
+            } else {
+                "Cannot reach the provider; check its base URL, TLS certificate, and network."
+                    .to_string()
+            }
         })?;
     match response.status().as_u16() {
         200..=299 => {}
@@ -301,12 +383,19 @@ pub fn discover_models(provider: &Provider) -> Result<Vec<ProviderModel>, String
         429 => return Err("Provider rate limit reached; retry model discovery later.".into()),
         status => return Err(format!("Model discovery failed (HTTP {status}); check provider availability.")),
     }
-    if response.content_length().is_some_and(|length| length > MAX_RESPONSE) {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RESPONSE)
+    {
         return Err("Provider model response is too large (maximum 2 MiB).".into());
     }
     let mut bytes = Vec::new();
-    response.take(MAX_RESPONSE + 1).read_to_end(&mut bytes)
-        .map_err(|_| "Cannot read the model response; retry and check the provider connection.".to_string())?;
+    response
+        .take(MAX_RESPONSE + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| {
+            "Cannot read the model response; retry and check the provider connection.".to_string()
+        })?;
     parse_models(&bytes)
 }
 
@@ -314,21 +403,39 @@ fn parse_models(bytes: &[u8]) -> Result<Vec<ProviderModel>, String> {
     if bytes.len() as u64 > MAX_RESPONSE {
         return Err("Provider model response is too large (maximum 2 MiB).".into());
     }
-    let value: Value = serde_json::from_slice(bytes)
-        .map_err(|_| "Provider returned invalid JSON; check the API base URL or add models manually.".to_string())?;
-    let rows = value.get("data").or_else(|| value.get("models")).unwrap_or(&value)
-        .as_array().ok_or("Expected an OpenAI model list; check the API base URL or add models manually.")?;
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| {
+        "Provider returned invalid JSON; check the API base URL or add models manually.".to_string()
+    })?;
+    let rows = value
+        .get("data")
+        .or_else(|| value.get("models"))
+        .unwrap_or(&value)
+        .as_array()
+        .ok_or("Expected an OpenAI model list; check the API base URL or add models manually.")?;
     let mut models = BTreeMap::new();
     for row in rows {
-        let Some(id) = row.get("id").or_else(|| row.get("model")).or_else(|| row.get("name"))
-            .and_then(Value::as_str).map(str::trim).filter(|id| !id.is_empty()) else { continue };
+        let Some(id) = row
+            .get("id")
+            .or_else(|| row.get("model"))
+            .or_else(|| row.get("name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
         let name = row.get("name").and_then(Value::as_str).unwrap_or("");
-        models.entry(id.to_string()).or_insert_with(|| ProviderModel {
-            id: id.to_string(), name: display_name(name, id).to_string(),
-        });
+        models
+            .entry(id.to_string())
+            .or_insert_with(|| ProviderModel {
+                id: id.to_string(),
+                name: display_name(name, id).to_string(),
+            });
     }
     if models.is_empty() {
-        return Err("Provider returned no usable models; check access or add model IDs manually.".into());
+        return Err(
+            "Provider returned no usable models; check access or add model IDs manually.".into(),
+        );
     }
     Ok(models.into_values().collect())
 }
@@ -347,12 +454,22 @@ fn raw_object(text: &str) -> Result<RawObject, String> {
     let mut fields = BTreeMap::new();
     while !rest.starts_with('}') {
         let mut keys = serde_json::Deserializer::from_str(rest).into_iter::<String>();
-        let key = keys.next().ok_or(invalid)?.map_err(|_| invalid.to_string())?;
+        let key = keys
+            .next()
+            .ok_or(invalid)?
+            .map_err(|_| invalid.to_string())?;
         let key_end = keys.byte_offset();
         let raw_key = rest[..key_end].to_string();
-        rest = rest[key_end..].trim_start().strip_prefix(':').ok_or(invalid)?.trim_start();
+        rest = rest[key_end..]
+            .trim_start()
+            .strip_prefix(':')
+            .ok_or(invalid)?
+            .trim_start();
         let mut values = serde_json::Deserializer::from_str(rest).into_iter::<Value>();
-        values.next().ok_or(invalid)?.map_err(|_| invalid.to_string())?;
+        values
+            .next()
+            .ok_or(invalid)?
+            .map_err(|_| invalid.to_string())?;
         let end = values.byte_offset();
         fields.insert(key, (raw_key, rest[..end].to_string()));
         rest = rest[end..].trim_start();
@@ -362,30 +479,50 @@ fn raw_object(text: &str) -> Result<RawObject, String> {
 }
 
 fn encode_object(fields: RawObject) -> String {
-    let entries: Vec<String> = fields.into_values().map(|(key, value)| format!("{key}:{value}")).collect();
+    let entries: Vec<String> = fields
+        .into_values()
+        .map(|(key, value)| format!("{key}:{value}"))
+        .collect();
     format!("{{{}}}", entries.join(","))
 }
 
 fn is_config_env(name: &str) -> bool {
-    if cfg!(windows) { name.eq_ignore_ascii_case(CONFIG_ENV) } else { name == CONFIG_ENV }
+    if cfg!(windows) {
+        name.eq_ignore_ascii_case(CONFIG_ENV)
+    } else {
+        name == CONFIG_ENV
+    }
 }
 
 /// Only mutates the supplied child-process environment, and only after all checks pass.
-pub fn merge_opencode_env(providers: &[Provider], env: &mut Vec<(String, String)>) -> Result<(), String> {
-    if providers.is_empty() { return Ok(()); }
+pub fn merge_opencode_env(
+    providers: &[Provider],
+    env: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    if providers.is_empty() {
+        return Ok(());
+    }
     let inherited = match env.iter().rev().find(|(name, _)| is_config_env(name)) {
         Some((_, value)) => Some(value.clone()),
         None => match std::env::var(CONFIG_ENV) {
             Ok(value) => Some(value),
             Err(std::env::VarError::NotPresent) => None,
-            Err(_) => return Err("Inherited OpenCode inline configuration is not valid Unicode.".into()),
+            Err(_) => {
+                return Err("Inherited OpenCode inline configuration is not valid Unicode.".into())
+            }
         },
     };
     merge_with_config(providers, env, inherited.as_deref())
 }
 
-fn merge_with_config(providers: &[Provider], env: &mut Vec<(String, String)>, content: Option<&str>) -> Result<(), String> {
-    if providers.is_empty() { return Ok(()); }
+fn merge_with_config(
+    providers: &[Provider],
+    env: &mut Vec<(String, String)>,
+    content: Option<&str>,
+) -> Result<(), String> {
+    if providers.is_empty() {
+        return Ok(());
+    }
     validate_all(providers, true)?;
     let mut config = raw_object(content.unwrap_or("{}"))?;
     let mut entries = match config.get("provider") {
@@ -395,18 +532,30 @@ fn merge_with_config(providers: &[Provider], env: &mut Vec<(String, String)>, co
     };
     for provider in providers {
         let id = opencode_id(&provider.id);
-        let headers: BTreeMap<_, _> = provider.headers.iter().map(|header| {
-            // The SDK spreads an object containing capitalized Authorization first.
-            // Match its spelling so custom auth replaces rather than duplicates it.
-            let name = if header.name.eq_ignore_ascii_case("authorization") {
-                "Authorization".into()
-            } else {
-                header.name.to_ascii_lowercase()
-            };
-            (name, &header.value)
-        }).collect();
-        let models: BTreeMap<_, _> = provider.models.iter()
-            .map(|model| (&model.id, json!({"name": display_name(&model.name, &model.id)}))).collect();
+        let headers: BTreeMap<_, _> = provider
+            .headers
+            .iter()
+            .map(|header| {
+                // The SDK spreads an object containing capitalized Authorization first.
+                // Match its spelling so custom auth replaces rather than duplicates it.
+                let name = if header.name.eq_ignore_ascii_case("authorization") {
+                    "Authorization".into()
+                } else {
+                    header.name.to_ascii_lowercase()
+                };
+                (name, &header.value)
+            })
+            .collect();
+        let models: BTreeMap<_, _> = provider
+            .models
+            .iter()
+            .map(|model| {
+                (
+                    &model.id,
+                    json!({"name": display_name(&model.name, &model.id)}),
+                )
+            })
+            .collect();
         let entry = json!({
             "npm": "@ai-sdk/openai-compatible", "name": provider.name,
             "options": {"baseURL": base_url(provider)?.as_str().trim_end_matches('/'),
@@ -415,10 +564,16 @@ fn merge_with_config(providers: &[Provider], env: &mut Vec<(String, String)>, co
         });
         // OpenCode substitutes raw text BEFORE JSON parsing. Unicode escapes make
         // arbitrary provider values literal without exposing extra process env vars.
-        let safe = entry.to_string().replace("{env:", "\\u007benv:").replace("{file:", "\\u007bfile:");
+        let safe = entry
+            .to_string()
+            .replace("{env:", "\\u007benv:")
+            .replace("{file:", "\\u007bfile:");
         entries.insert(id.clone(), (json!(id).to_string(), safe));
     }
-    config.insert("provider".into(), ("\"provider\"".into(), encode_object(entries)));
+    config.insert(
+        "provider".into(),
+        ("\"provider\"".into(), encode_object(entries)),
+    );
     let merged = encode_object(config);
     env.retain(|(name, _)| !is_config_env(name));
     env.push((CONFIG_ENV.into(), merged));
@@ -435,9 +590,15 @@ mod tests {
 
     fn provider() -> Provider {
         Provider {
-            id: "local".into(), name: "Local".into(), base_url: "http://127.0.0.1:11434/v1".into(),
-            api_key: String::new(), headers: Vec::new(),
-            models: vec![ProviderModel { id: "model-a".into(), name: String::new() }],
+            id: "local".into(),
+            name: "Local".into(),
+            base_url: "http://127.0.0.1:11434/v1".into(),
+            api_key: String::new(),
+            headers: Vec::new(),
+            models: vec![ProviderModel {
+                id: "model-a".into(),
+                name: String::new(),
+            }],
         }
     }
 
@@ -474,7 +635,10 @@ mod tests {
         fs::write(&path, "[]").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         save_path(&path, &[provider()]).unwrap();
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         let link = dir.path().join("link.json");
         symlink(&path, &link).unwrap();
         assert!(load_path(&link).is_err());
@@ -498,13 +662,25 @@ mod tests {
             assert!(validate(&p, false).is_err());
         }
         p = provider();
-        for url in ["https://user:secret@example.com", "https://@example.com", "https://example.com?q=secret",
-            "https://example.com/#secret", "http://example.com", "file:///secret", "not a url"] {
+        for url in [
+            "https://user:secret@example.com",
+            "https://@example.com",
+            "https://example.com?q=secret",
+            "https://example.com/#secret",
+            "http://example.com",
+            "file:///secret",
+            "not a url",
+        ] {
             p.base_url = url.into();
             let error = validate(&p, false).unwrap_err();
             assert!(!error.contains("secret"));
         }
-        for url in ["https://example.com/api/v1/", "http://localhost:9000", "http://[::1]:8080", "http://127.2.3.4"] {
+        for url in [
+            "https://example.com/api/v1/",
+            "http://localhost:9000",
+            "http://[::1]:8080",
+            "http://127.2.3.4",
+        ] {
             p.base_url = url.into();
             assert!(validate(&p, false).is_ok());
         }
@@ -528,16 +704,42 @@ mod tests {
         let mut p = provider();
         assert!(request_headers(&p).unwrap().get(AUTHORIZATION).is_none());
         p.api_key = "default-key".into();
-        assert_eq!(request_headers(&p).unwrap()[AUTHORIZATION], "Bearer default-key");
-        p.headers.push(ProviderHeader { name: "aUtHoRiZaTiOn".into(), value: "Basic override".into() });
-        assert_eq!(request_headers(&p).unwrap()[AUTHORIZATION], "Basic override");
-        p.headers.push(ProviderHeader { name: "authorization".into(), value: String::new() });
+        assert_eq!(
+            request_headers(&p).unwrap()[AUTHORIZATION],
+            "Bearer default-key"
+        );
+        p.headers.push(ProviderHeader {
+            name: "aUtHoRiZaTiOn".into(),
+            value: "Basic override".into(),
+        });
+        assert_eq!(
+            request_headers(&p).unwrap()[AUTHORIZATION],
+            "Basic override"
+        );
+        p.headers.push(ProviderHeader {
+            name: "authorization".into(),
+            value: String::new(),
+        });
         assert!(validate(&p, false).is_err());
-        for name in ["Host", "Content-Length", "Transfer-Encoding", "Connection", "Proxy-Authorization", "bad name", ""] {
-            p.headers = vec![ProviderHeader { name: name.into(), value: "secret".into() }];
+        for name in [
+            "Host",
+            "Content-Length",
+            "Transfer-Encoding",
+            "Connection",
+            "Proxy-Authorization",
+            "bad name",
+            "",
+        ] {
+            p.headers = vec![ProviderHeader {
+                name: name.into(),
+                value: "secret".into(),
+            }];
             assert!(!validate(&p, false).unwrap_err().contains("secret"));
         }
-        p.headers = vec![ProviderHeader { name: "x-key".into(), value: "secret\ninvalid".into() }];
+        p.headers = vec![ProviderHeader {
+            name: "x-key".into(),
+            value: "secret\ninvalid".into(),
+        }];
         assert!(!validate(&p, false).unwrap_err().contains("secret"));
         p.headers.clear();
         p.api_key = "secret\r\ninjected: yes".into();
@@ -546,13 +748,29 @@ mod tests {
 
     #[test]
     fn parsing_deduplication_sorting_and_sanitization() {
-        let models = parse_models(br#"{"data":[{"id":"z"},{"id":"a","name":"Alpha"},{"id":"a"},{"id":""},{}]}"#).unwrap();
-        assert_eq!(models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["a", "z"]);
+        let models = parse_models(
+            br#"{"data":[{"id":"z"},{"id":"a","name":"Alpha"},{"id":"a"},{"id":""},{}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["a", "z"]
+        );
         assert_eq!(models[0].name, "Alpha");
         assert_eq!(models[1].name, "z");
-        assert_eq!(parse_models(br#"{"models":[{"model":"local","name":"Local"}]}"#).unwrap()[0].id, "local");
-        assert_eq!(parse_models(br#"[{"id":"direct"}]"#).unwrap()[0].id, "direct");
-        for bytes in [b"secret".as_slice(), br#"{"error":"secret"}"#, br#"{"data":[]}"#] {
+        assert_eq!(
+            parse_models(br#"{"models":[{"model":"local","name":"Local"}]}"#).unwrap()[0].id,
+            "local"
+        );
+        assert_eq!(
+            parse_models(br#"[{"id":"direct"}]"#).unwrap()[0].id,
+            "direct"
+        );
+        for bytes in [
+            b"secret".as_slice(),
+            br#"{"error":"secret"}"#,
+            br#"{"data":[]}"#,
+        ] {
             assert!(!parse_models(bytes).err().unwrap().contains("secret"));
         }
     }
@@ -569,14 +787,23 @@ mod tests {
             let (mut stream, _) = loop {
                 match listener.accept() {
                     Ok(connection) => break connection,
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+                    Err(error)
+                        if error.kind() == io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(5))
+                    }
                     Err(error) => panic!("Loopback fixture accept failed: {error}"),
                 }
             };
             // macOS can inherit the listener's nonblocking flag on accepted streams.
             stream.set_nonblocking(false).unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
             let mut request = Vec::new();
             while !request.ends_with(b"\r\n\r\n") && request.len() < 32768 {
                 let mut byte = [0];
@@ -590,16 +817,25 @@ mod tests {
     }
 
     fn http(status: &str, headers: &str, body: &str) -> Vec<u8> {
-        format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n{body}", body.len()).into_bytes()
+        format!(
+            "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
     }
 
     #[test]
     fn discovery_optional_auth_and_custom_header_on_wire() {
         for auth in [None, Some("Bearer default-key"), Some("Basic override")] {
             let (mut p, request, task) = fixture(http("200 OK", "", r#"{"data":[{"id":"a"}]}"#));
-            if auth.is_some() { p.api_key = "default-key".into(); }
+            if auth.is_some() {
+                p.api_key = "default-key".into();
+            }
             if auth == Some("Basic override") {
-                p.headers.push(ProviderHeader { name: "Authorization".into(), value: "Basic override".into() });
+                p.headers.push(ProviderHeader {
+                    name: "Authorization".into(),
+                    value: "Basic override".into(),
+                });
             }
             assert_eq!(discover_models(&p).unwrap()[0].id, "a");
             let request = request.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -614,14 +850,28 @@ mod tests {
 
     #[test]
     fn discovery_http_errors_redirects_and_chunked_limit() {
-        for status in ["401 Unauthorized", "403 Forbidden", "404 Not Found", "429 Too Many Requests", "500 Failure", "302 Found"] {
-            let (p, _request, task) = fixture(http(status, "Location: http://127.0.0.1:1/secret\r\n", "secret"));
+        for status in [
+            "401 Unauthorized",
+            "403 Forbidden",
+            "404 Not Found",
+            "429 Too Many Requests",
+            "500 Failure",
+            "302 Found",
+        ] {
+            let (p, _request, task) = fixture(http(
+                status,
+                "Location: http://127.0.0.1:1/secret\r\n",
+                "secret",
+            ));
             let error = discover_models(&p).err().unwrap();
             assert!(!error.contains("secret") && !error.contains("127.0.0.1"));
-            if status.starts_with("302") { assert!(error.contains("Redirects are blocked")); }
+            if status.starts_with("302") {
+                assert!(error.contains("Redirects are blocked"));
+            }
             task.join().unwrap();
         }
-        let mut response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
+        let mut response =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
         response.extend_from_slice(format!("{:x}\r\n", MAX_RESPONSE + 1).as_bytes());
         response.extend(vec![b'x'; MAX_RESPONSE as usize + 1]);
         response.extend_from_slice(b"\r\n0\r\n\r\n");
@@ -634,7 +884,10 @@ mod tests {
             assert!(!discover_models(&p).err().unwrap().contains("secret"));
             task.join().unwrap();
         }
-        let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", MAX_RESPONSE + 1);
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            MAX_RESPONSE + 1
+        );
         let (p, _request, task) = fixture(response.into_bytes());
         let error = discover_models(&p).err().unwrap();
         assert!(error.contains("too large"), "{error}");
@@ -648,7 +901,10 @@ mod tests {
         other.id = "remote".into();
         other.api_key = "key".into();
         other.base_url = "https://example.com/v1/".into();
-        other.headers.push(ProviderHeader { name: "aUtHoRiZaTiOn".into(), value: "Basic override".into() });
+        other.headers.push(ProviderHeader {
+            name: "aUtHoRiZaTiOn".into(),
+            value: "Basic override".into(),
+        });
         let mut env = vec![("OTHER".into(), "keep".into()), (CONFIG_ENV.into(), "invalid earlier value".into()),
             (CONFIG_ENV.into(), r#"{"model":"existing/model","disabled_providers":["other"],"provider":{"existing":{"options":{"apiKey":"keep"}},"wake-local":{"old":true},"wake-removed":{"keep":true}}}"#.into())];
         merge_opencode_env(&[p, other], &mut env).unwrap();
@@ -661,9 +917,18 @@ mod tests {
         assert_eq!(config["provider"]["wake-removed"]["keep"], true);
         assert!(config["provider"]["wake-local"].get("old").is_none());
         assert_eq!(config["provider"]["wake-local"]["options"]["apiKey"], "");
-        assert_eq!(config["provider"]["wake-local"]["models"]["model-a"]["name"], "model-a");
-        assert_eq!(config["provider"]["wake-remote"]["npm"], "@ai-sdk/openai-compatible");
-        assert_eq!(config["provider"]["wake-remote"]["options"]["headers"]["Authorization"], "Basic override");
+        assert_eq!(
+            config["provider"]["wake-local"]["models"]["model-a"]["name"],
+            "model-a"
+        );
+        assert_eq!(
+            config["provider"]["wake-remote"]["npm"],
+            "@ai-sdk/openai-compatible"
+        );
+        assert_eq!(
+            config["provider"]["wake-remote"]["options"]["headers"]["Authorization"],
+            "Basic override"
+        );
     }
 
     #[test]
@@ -671,7 +936,10 @@ mod tests {
         let mut p = provider();
         p.name = "{file:/secret}".into();
         p.api_key = "{env:SECRET}".into();
-        p.headers.push(ProviderHeader { name: "x-literal".into(), value: "{file:/secret}".into() });
+        p.headers.push(ProviderHeader {
+            name: "x-literal".into(),
+            value: "{file:/secret}".into(),
+        });
         p.models[0].id = "{env:MODEL}".into();
         let original = r#"{"instructions":["{file:intentional}","\u007bfile:literal}"],"provider":{"old":{"name":"\u007benv:literal}"}},"nested":{"a":[1,{"b":"x,}:\""}]},"literal":false,"number":123,"empty":null}"#;
         let mut env = Vec::new();
@@ -686,7 +954,10 @@ mod tests {
         assert!(!env[0].1.contains("{env:SECRET}"));
         assert!(!env[0].1.contains("{file:/secret}"));
         let parsed: Value = serde_json::from_str(&env[0].1).unwrap();
-        assert_eq!(parsed["provider"]["wake-local"]["options"]["apiKey"], p.api_key);
+        assert_eq!(
+            parsed["provider"]["wake-local"]["options"]["apiKey"],
+            p.api_key
+        );
         let mut second = provider();
         second.id = "second".into();
         merge_opencode_env(&[second], &mut env).unwrap();

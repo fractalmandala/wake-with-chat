@@ -706,19 +706,23 @@ fn parse_qoder_task_jsonl(path: &Path, decode_images: bool) -> Result<QoderParse
     let mut updated_at = 0i64;
 
     // tool_call 的 id → (消息下标, 工具下标),供 tool_result 行回填
-    let register_tools = |message_ix: usize, calls: &[ToolCallView], index: &mut HashMap<String, (usize, usize)>| {
-        for (tool_ix, tool) in calls.iter().enumerate() {
-            if !tool.id.is_empty() {
-                index.insert(tool.id.clone(), (message_ix, tool_ix));
+    let register_tools =
+        |message_ix: usize, calls: &[ToolCallView], index: &mut HashMap<String, (usize, usize)>| {
+            for (tool_ix, tool) in calls.iter().enumerate() {
+                if !tool.id.is_empty() {
+                    index.insert(tool.id.clone(), (message_ix, tool_ix));
+                }
             }
-        }
-    };
+        };
     let backfill = |id: &str,
                     raw: &str,
                     messages: &mut Vec<TranscriptMessage>,
                     index: &HashMap<String, (usize, usize)>| {
         if let Some(&(msg_ix, tool_ix)) = index.get(id) {
-            if let Some(tool) = messages.get_mut(msg_ix).and_then(|m| m.tool_calls.get_mut(tool_ix)) {
+            if let Some(tool) = messages
+                .get_mut(msg_ix)
+                .and_then(|m| m.tool_calls.get_mut(tool_ix))
+            {
                 tool.output = Some(clip(&task_tool_output(raw), MAX_TOOL_IO).0);
             }
         }
@@ -772,8 +776,8 @@ fn parse_qoder_task_jsonl(path: &Path, decode_images: bool) -> Result<QoderParse
                     }
                     Some("tool_call") => {
                         let id = optional_string(data.get("id")).unwrap_or_default();
-                        let name = optional_string(data.get("name"))
-                            .unwrap_or_else(|| "tool".to_string());
+                        let name =
+                            optional_string(data.get("name")).unwrap_or_else(|| "tool".to_string());
                         // input 是 JSON 字符串,解不开退回原文串
                         let input = match optional_string(data.get("input")) {
                             Some(raw) => {
@@ -860,7 +864,11 @@ fn parse_qoder_task_jsonl(path: &Path, decode_images: bool) -> Result<QoderParse
             messages.push(TranscriptMessage {
                 seq: 0,
                 role: Role::User,
-                kind: if meta { MessageKind::Meta } else { MessageKind::Text },
+                kind: if meta {
+                    MessageKind::Meta
+                } else {
+                    MessageKind::Text
+                },
                 text,
                 truncated,
                 tool_calls: Vec::new(),
@@ -975,12 +983,7 @@ impl AgentAdapter for QoderAdapter {
             // 任务文件在任务根直属或其编码项目目录一层内
             return self
                 .task_roots()
-                .any(|root| {
-                    path
-                        .ancestors()
-                        .take(3)
-                        .any(|a| a == root.as_path())
-                })
+                .any(|root| path.ancestors().take(3).any(|a| a == root.as_path()))
                 .then(|| default_file_ref(self.agent(), path))
                 .flatten();
         }

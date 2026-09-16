@@ -7,7 +7,9 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
-use gpui_component::{h_flex, v_flex, ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _};
+use gpui_component::{
+    h_flex, v_flex, ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _,
+};
 
 struct PairRow {
     key: Entity<InputState>,
@@ -38,9 +40,17 @@ pub(crate) struct ProvidersPage {
     opencode_available: bool,
 }
 
-fn input(value: &str, placeholder: &str, masked: bool, window: &mut Window, cx: &mut App) -> Entity<InputState> {
+fn input(
+    value: &str,
+    placeholder: &str,
+    masked: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<InputState> {
     cx.new(|cx| {
-        let mut state = InputState::new(window, cx).placeholder(placeholder.to_owned()).masked(masked);
+        let mut state = InputState::new(window, cx)
+            .placeholder(placeholder.to_owned())
+            .masked(masked);
         state.set_value(value, window, cx);
         state
     })
@@ -48,8 +58,24 @@ fn input(value: &str, placeholder: &str, masked: bool, window: &mut Window, cx: 
 
 fn pair(key: &str, value: &str, header: bool, window: &mut Window, cx: &mut App) -> PairRow {
     PairRow {
-        key: input(key, if header { "Header-Name" } else { "model-id" }, false, window, cx),
-        value: input(value, if header { t("Value") } else { t("Display name") }, header, window, cx),
+        key: input(
+            key,
+            if header { "Header-Name" } else { "model-id" },
+            false,
+            window,
+            cx,
+        ),
+        value: input(
+            value,
+            if header {
+                t("Value")
+            } else {
+                t("Display name")
+            },
+            header,
+            window,
+            cx,
+        ),
     }
 }
 
@@ -58,20 +84,43 @@ impl ProviderForm {
         Provider {
             id: self.id.read(cx).value().trim().to_string(),
             name: self.name.read(cx).value().trim().to_string(),
-            base_url: self.base.read(cx).value().trim().trim_end_matches('/').to_string(),
+            base_url: self
+                .base
+                .read(cx)
+                .value()
+                .trim()
+                .trim_end_matches('/')
+                .to_string(),
             api_key: self.key.read(cx).value().trim().to_string(),
-            models: self.models.iter().filter_map(|row| {
-                let id = row.key.read(cx).value().trim().to_string();
-                let name = row.value.read(cx).value().trim().to_string();
-                if id.is_empty() && name.is_empty() { None } else {
-                    Some(ProviderModel { name: if name.is_empty() { id.clone() } else { name }, id })
-                }
-            }).collect(),
-            headers: self.headers.iter().filter_map(|row| {
-                let name = row.key.read(cx).value().trim().to_string();
-                let value = row.value.read(cx).value().to_string();
-                if name.is_empty() && value.is_empty() { None } else { Some(ProviderHeader { name, value }) }
-            }).collect(),
+            models: self
+                .models
+                .iter()
+                .filter_map(|row| {
+                    let id = row.key.read(cx).value().trim().to_string();
+                    let name = row.value.read(cx).value().trim().to_string();
+                    if id.is_empty() && name.is_empty() {
+                        None
+                    } else {
+                        Some(ProviderModel {
+                            name: if name.is_empty() { id.clone() } else { name },
+                            id,
+                        })
+                    }
+                })
+                .collect(),
+            headers: self
+                .headers
+                .iter()
+                .filter_map(|row| {
+                    let name = row.key.read(cx).value().trim().to_string();
+                    let value = row.value.read(cx).value().to_string();
+                    if name.is_empty() && value.is_empty() {
+                        None
+                    } else {
+                        Some(ProviderHeader { name, value })
+                    }
+                })
+                .collect(),
         }
     }
 }
@@ -89,28 +138,61 @@ impl ProvidersPage {
         });
         cx.spawn(async move |_, cx| {
             let available = probe.await;
-            let _ = weak.update(cx, |this, cx| { this.opencode_available = available; cx.notify(); });
-        }).detach();
-        Self { records, load_error, message: None, form: None, generation: 0, disconnecting: None, opencode_available: true }
+            let _ = weak.update(cx, |this, cx| {
+                this.opencode_available = available;
+                cx.notify();
+            });
+        })
+        .detach();
+        Self {
+            records,
+            load_error,
+            message: None,
+            form: None,
+            generation: 0,
+            disconnecting: None,
+            opencode_available: true,
+        }
     }
 
     fn edit(&mut self, record: Option<Provider>, window: &mut Window, cx: &mut Context<Self>) {
         self.generation += 1;
         let original_id = record.as_ref().map(|p| p.id.clone());
         let record = record.unwrap_or_default();
-        let models = record.models.iter().map(|m| pair(&m.id, &m.name, false, window, cx)).collect();
-        let headers = record.headers.iter().map(|h| pair(&h.name, &h.value, true, window, cx)).collect();
+        let models = record
+            .models
+            .iter()
+            .map(|m| pair(&m.id, &m.name, false, window, cx))
+            .collect();
+        let headers = record
+            .headers
+            .iter()
+            .map(|h| pair(&h.name, &h.value, true, window, cx))
+            .collect();
         self.form = Some(ProviderForm {
-            original_id, generation: self.generation,
+            original_id,
+            generation: self.generation,
             id: input(&record.id, "myprovider", false, window, cx),
             name: input(&record.name, t("My AI provider"), false, window, cx),
-            base: input(&record.base_url, "https://api.example.com/v1", false, window, cx),
+            base: input(
+                &record.base_url,
+                "https://api.example.com/v1",
+                false,
+                window,
+                cx,
+            ),
             key: input(&record.api_key, t("API key (optional)"), true, window, cx),
-            models, headers, discovering: false, error: None, message: None,
+            models,
+            headers,
+            discovering: false,
+            error: None,
+            message: None,
         });
         self.message = None;
         self.disconnecting = None;
-        if let Some(form) = &self.form { form.name.update(cx, |state, cx| state.focus(window, cx)); }
+        if let Some(form) = &self.form {
+            form.name.update(cx, |state, cx| state.focus(window, cx));
+        }
         cx.notify();
     }
 
@@ -122,26 +204,44 @@ impl ProvidersPage {
 
     fn add_row(&mut self, header: bool, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(form) = &mut self.form {
-            if form.discovering { return; }
+            if form.discovering {
+                return;
+            }
             let row = pair("", "", header, window, cx);
             row.key.update(cx, |state, cx| state.focus(window, cx));
-            if header { form.headers.push(row); } else { form.models.push(row); }
+            if header {
+                form.headers.push(row);
+            } else {
+                form.models.push(row);
+            }
             cx.notify();
         }
     }
 
     fn remove_row(&mut self, header: bool, index: usize, cx: &mut Context<Self>) {
         if let Some(form) = &mut self.form {
-            if form.discovering { return; }
-            let rows = if header { &mut form.headers } else { &mut form.models };
-            if index < rows.len() { rows.remove(index); }
+            if form.discovering {
+                return;
+            }
+            let rows = if header {
+                &mut form.headers
+            } else {
+                &mut form.models
+            };
+            if index < rows.len() {
+                rows.remove(index);
+            }
             cx.notify();
         }
     }
 
     fn save_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(form) = &self.form else { return; };
-        if form.discovering { return; }
+        let Some(form) = &self.form else {
+            return;
+        };
+        if form.discovering {
+            return;
+        }
         let record = form.snapshot(cx);
         if record.models.is_empty() {
             // Connect automatically discovers when the user has not supplied a model list.
@@ -152,11 +252,16 @@ impl ProvidersPage {
     }
 
     fn commit(&mut self, record: Provider, cx: &mut Context<Self>) {
-        let Some(form) = &self.form else { return; };
+        let Some(form) = &self.form else {
+            return;
+        };
         let original = form.original_id.clone();
         let result = providers::validate(&record, true).and_then(|_| {
             let mut records = providers::load()?;
-            if records.iter().any(|p| p.id == record.id && Some(&p.id) != original.as_ref()) {
+            if records
+                .iter()
+                .any(|p| p.id == record.id && Some(&p.id) != original.as_ref())
+            {
                 return Err(t("That provider ID is already in use.").to_string());
             }
             records.retain(|p| Some(&p.id) != original.as_ref());
@@ -170,19 +275,31 @@ impl ProvidersPage {
                 self.records = records;
                 self.form = None;
                 self.load_error = None;
-                self.message = Some(t("Provider saved. Start a new OpenCode chat and choose its model.").into());
+                self.message = Some(
+                    t("Provider saved. Start a new OpenCode chat and choose its model.").into(),
+                );
             }
-            Err(error) => if let Some(form) = &mut self.form { form.error = Some(error); },
+            Err(error) => {
+                if let Some(form) = &mut self.form {
+                    form.error = Some(error);
+                }
+            }
         }
         cx.notify();
     }
 
     fn discover(&mut self, connect_after: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(form) = &self.form else { return; };
-        if form.discovering { return; }
+        let Some(form) = &self.form else {
+            return;
+        };
+        if form.discovering {
+            return;
+        }
         let request = form.snapshot(cx);
         if let Err(error) = providers::validate(&request, false) {
-            if let Some(form) = &mut self.form { form.error = Some(error); }
+            if let Some(form) = &mut self.form {
+                form.error = Some(error);
+            }
             cx.notify();
             return;
         }
@@ -193,22 +310,38 @@ impl ProvidersPage {
         form.message = None;
         let (tx, rx) = futures::channel::oneshot::channel();
         let provider = request.clone();
-        std::thread::spawn(move || { let _ = tx.send(providers::discover_models(&provider)); });
+        std::thread::spawn(move || {
+            let _ = tx.send(providers::discover_models(&provider));
+        });
         cx.spawn_in(window, async move |this, cx| {
-            let result = rx.await.unwrap_or_else(|_| Err(t("Model discovery stopped unexpectedly. Please retry.").into()));
+            let result = rx.await.unwrap_or_else(|_| {
+                Err(t("Model discovery stopped unexpectedly. Please retry.").into())
+            });
             let _ = this.update_in(cx, |this, window, cx| {
-                let Some(form) = &mut this.form else { return; };
-                if form.generation != generation { return; }
+                let Some(form) = &mut this.form else {
+                    return;
+                };
+                if form.generation != generation {
+                    return;
+                }
                 form.discovering = false;
                 // Inputs are disabled during discovery; still guard against programmatic changes.
-                if form.snapshot(cx) != request { return; }
+                if form.snapshot(cx) != request {
+                    return;
+                }
                 match result {
                     Ok(models) => {
                         let count = models.len();
                         // Preserve manually supplied names and models on refresh.
                         let merged = merge_models(&request.models, models);
-                        form.models = merged.iter().map(|m| pair(&m.id, &m.name, false, window, cx)).collect();
-                        form.message = Some(crate::tf!("Found {} models. You can edit this list before saving.", count));
+                        form.models = merged
+                            .iter()
+                            .map(|m| pair(&m.id, &m.name, false, window, cx))
+                            .collect();
+                        form.message = Some(crate::tf!(
+                            "Found {} models. You can edit this list before saving.",
+                            count
+                        ));
                         if connect_after {
                             let mut record = request;
                             record.models = merged;
@@ -219,7 +352,8 @@ impl ProvidersPage {
                 }
                 cx.notify();
             });
-        }).detach();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -242,35 +376,111 @@ impl ProvidersPage {
 
     fn render_list(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let rows = self.records.iter().enumerate().map(|(ix, provider)| {
-            let record = provider.clone();
-            let id = provider.id.clone();
-            let confirming = self.disconnecting.as_ref() == Some(&id);
-            v_flex().flex_shrink_0().px(SPACE_LG).py(SPACE_MD).gap(SPACE_SM)
-                .when(ix > 0, |row| row.border_t_1().border_color(theme.border))
-                .child(h_flex().gap(SPACE_MD).items_center()
-                    .child(Icon::empty().path("icons/plug.svg").with_size(px(18.)))
-                    .child(v_flex().flex_1().min_w_0().gap(SPACE_XS)
-                        .child(div().font_medium().truncate().child(provider.name.clone()))
-                        .child(div().text_size(FONT_CAPTION).text_color(theme.muted_foreground).truncate().child(provider.base_url.clone()))
-                        .child(div().text_size(FONT_LABEL).text_color(theme.muted_foreground)
-                            .child(crate::tf!("{} models · OpenCode", provider.models.len()))))
-                    .child(settings_button(Button::new(("provider-edit", ix)).label(t("Edit")), cx)
-                        .disabled(confirming)
-                        .on_click(cx.listener(move |this, _, window, cx| this.edit(Some(record.clone()), window, cx))))
-                    .child(Button::new(("provider-disconnect", ix)).ghost().small().label(t("Disconnect"))
-                        .on_click(cx.listener(move |this, _, _, cx| { this.disconnecting = Some(id.clone()); cx.notify(); }))))
-                .when(confirming, |row| {
-                    let id = provider.id.clone();
-                    row.child(div().text_size(FONT_CAPTION).text_color(theme.muted_foreground)
-                        .child(t("Remove this provider and its saved credentials from Wake?")))
-                        .child(h_flex().gap(SPACE_SM).justify_end()
-                            .child(Button::new(("provider-disconnect-cancel", ix)).ghost().small().label(t("Cancel"))
-                                .on_click(cx.listener(|this, _, _, cx| { this.disconnecting = None; cx.notify(); })))
-                            .child(settings_button(Button::new(("provider-disconnect-confirm", ix)).label(t("Disconnect provider")), cx)
-                                .on_click(cx.listener(move |this, _, _, cx| this.disconnect(&id, cx)))))
-                })
-        }).collect::<Vec<_>>();
+        let rows = self
+            .records
+            .iter()
+            .enumerate()
+            .map(|(ix, provider)| {
+                let record = provider.clone();
+                let id = provider.id.clone();
+                let confirming = self.disconnecting.as_ref() == Some(&id);
+                v_flex()
+                    .flex_shrink_0()
+                    .px(SPACE_LG)
+                    .py(SPACE_MD)
+                    .gap(SPACE_SM)
+                    .when(ix > 0, |row| row.border_t_1().border_color(theme.border))
+                    .child(
+                        h_flex()
+                            .gap(SPACE_MD)
+                            .items_center()
+                            .child(Icon::empty().path("icons/plug.svg").with_size(px(18.)))
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap(SPACE_XS)
+                                    .child(
+                                        div().font_medium().truncate().child(provider.name.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(FONT_CAPTION)
+                                            .text_color(theme.muted_foreground)
+                                            .truncate()
+                                            .child(provider.base_url.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(FONT_LABEL)
+                                            .text_color(theme.muted_foreground)
+                                            .child(crate::tf!(
+                                                "{} models · OpenCode",
+                                                provider.models.len()
+                                            )),
+                                    ),
+                            )
+                            .child(
+                                settings_button(
+                                    Button::new(("provider-edit", ix)).label(t("Edit")),
+                                    cx,
+                                )
+                                .disabled(confirming)
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.edit(Some(record.clone()), window, cx)
+                                    },
+                                )),
+                            )
+                            .child(
+                                Button::new(("provider-disconnect", ix))
+                                    .ghost()
+                                    .small()
+                                    .label(t("Disconnect"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.disconnecting = Some(id.clone());
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .when(confirming, |row| {
+                        let id = provider.id.clone();
+                        row.child(
+                            div()
+                                .text_size(FONT_CAPTION)
+                                .text_color(theme.muted_foreground)
+                                .child(t(
+                                    "Remove this provider and its saved credentials from Wake?",
+                                )),
+                        )
+                        .child(
+                            h_flex()
+                                .gap(SPACE_SM)
+                                .justify_end()
+                                .child(
+                                    Button::new(("provider-disconnect-cancel", ix))
+                                        .ghost()
+                                        .small()
+                                        .label(t("Cancel"))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.disconnecting = None;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    settings_button(
+                                        Button::new(("provider-disconnect-confirm", ix))
+                                            .label(t("Disconnect provider")),
+                                        cx,
+                                    )
+                                    .on_click(
+                                        cx.listener(move |this, _, _, cx| this.disconnect(&id, cx)),
+                                    ),
+                                ),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
         v_flex().flex_1().min_h_0().min_w_0()
             .child(settings_page_header(t("Providers"), t("Connect OpenAI-compatible APIs to OpenCode chats."), cx))
             .child(v_flex().id("providers-list").flex_1().min_h_0().overflow_y_scroll().px(SPACE_XXL).pb(SPACE_XXL).gap(SPACE_LG)
@@ -294,15 +504,47 @@ impl ProvidersPage {
     }
 
     fn render_pairs(&self, rows: &[PairRow], header: bool, busy: bool, cx: &Context<Self>) -> Div {
-        v_flex().gap(SPACE_SM).children(rows.iter().enumerate().map(|(ix, row)| {
-            h_flex().gap(SPACE_SM).items_center()
-                .child(div().flex_1().min_w_0().child(Input::new(&row.key).disabled(busy)))
-                .child(div().flex_1().min_w_0().child(Input::new(&row.value).disabled(busy)))
-                .child(Button::new((if header { "provider-header-remove" } else { "provider-model-remove" }, ix))
-                    .ghost().small().icon(Icon::empty().path("icons/trash-2.svg").with_size(px(14.)))
-                    .tooltip(if header { t("Remove header") } else { t("Remove model") }).disabled(busy)
-                    .on_click(cx.listener(move |this, _, _, cx| this.remove_row(header, ix, cx))))
-        }))
+        v_flex()
+            .gap(SPACE_SM)
+            .children(rows.iter().enumerate().map(|(ix, row)| {
+                h_flex()
+                    .gap(SPACE_SM)
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(&row.key).disabled(busy)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(&row.value).disabled(busy)),
+                    )
+                    .child(
+                        Button::new((
+                            if header {
+                                "provider-header-remove"
+                            } else {
+                                "provider-model-remove"
+                            },
+                            ix,
+                        ))
+                        .ghost()
+                        .small()
+                        .icon(Icon::empty().path("icons/trash-2.svg").with_size(px(14.)))
+                        .tooltip(if header {
+                            t("Remove header")
+                        } else {
+                            t("Remove model")
+                        })
+                        .disabled(busy)
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.remove_row(header, ix, cx)),
+                        ),
+                    )
+            }))
     }
 
     fn render_form(&self, form: &ProviderForm, cx: &Context<Self>) -> AnyElement {
@@ -342,33 +584,65 @@ impl ProvidersPage {
     }
 }
 
-fn field(label: &'static str, state: &Entity<InputState>, disabled: bool, hint: Option<&'static str>, cx: &App) -> Div {
-    v_flex().flex_shrink_0().gap(SPACE_SM)
-        .child(div().text_size(FONT_CAPTION).text_color(cx.theme().muted_foreground).child(label))
+fn field(
+    label: &'static str,
+    state: &Entity<InputState>,
+    disabled: bool,
+    hint: Option<&'static str>,
+    cx: &App,
+) -> Div {
+    v_flex()
+        .flex_shrink_0()
+        .gap(SPACE_SM)
+        .child(
+            div()
+                .text_size(FONT_CAPTION)
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
+        )
         .child(Input::new(state).disabled(disabled))
-        .when_some(hint, |this, hint| this.child(div().text_size(FONT_CAPTION).text_color(cx.theme().muted_foreground).child(hint)))
+        .when_some(hint, |this, hint| {
+            this.child(
+                div()
+                    .text_size(FONT_CAPTION)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(hint),
+            )
+        })
 }
 
 fn notice(message: String, error: bool, cx: &App) -> Div {
-    div().flex_shrink_0().text_size(FONT_CAPTION)
-        .text_color(if error { cx.theme().danger } else { cx.theme().muted_foreground })
+    div()
+        .flex_shrink_0()
+        .text_size(FONT_CAPTION)
+        .text_color(if error {
+            cx.theme().danger
+        } else {
+            cx.theme().muted_foreground
+        })
         .child(message)
 }
 
 fn merge_models(existing: &[ProviderModel], discovered: Vec<ProviderModel>) -> Vec<ProviderModel> {
     let mut merged = existing.to_vec();
     for model in discovered {
-        if !merged.iter().any(|m| m.id == model.id) { merged.push(model); }
+        if !merged.iter().any(|m| m.id == model.id) {
+            merged.push(model);
+        }
     }
     merged
 }
 
 impl Render for ProvidersPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex().size_full().min_w_0().bg(cx.theme().background).child(match &self.form {
-            Some(form) => self.render_form(form, cx),
-            None => self.render_list(cx),
-        })
+        v_flex()
+            .size_full()
+            .min_w_0()
+            .bg(cx.theme().background)
+            .child(match &self.form {
+                Some(form) => self.render_form(form, cx),
+                None => self.render_list(cx),
+            })
     }
 }
 
@@ -377,11 +651,23 @@ mod tests {
     use super::{merge_models, ProviderModel};
     #[test]
     fn discovery_merge_preserves_custom_names_and_manual_models() {
-        let existing = vec![ProviderModel { id: "a".into(), name: "Custom".into() }];
-        let result = merge_models(&existing, vec![
-            ProviderModel { id: "a".into(), name: "Detected".into() },
-            ProviderModel { id: "b".into(), name: "New".into() },
-        ]);
+        let existing = vec![ProviderModel {
+            id: "a".into(),
+            name: "Custom".into(),
+        }];
+        let result = merge_models(
+            &existing,
+            vec![
+                ProviderModel {
+                    id: "a".into(),
+                    name: "Detected".into(),
+                },
+                ProviderModel {
+                    id: "b".into(),
+                    name: "New".into(),
+                },
+            ],
+        );
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "Custom");
         assert_eq!(result[1].id, "b");

@@ -208,7 +208,11 @@ fn key_bindings() -> Vec<KeyBinding> {
     // Linux/Windows 上 ctrl-h/ctrl-m 另有含义,不绑
     let mut keys = vec![
         KeyBinding::new(ui::SEARCH_KEYSTROKE, ToggleSearch, Some(KEY_CONTEXT)),
-        KeyBinding::new("secondary-shift-c", workbench::ToggleChat, Some(KEY_CONTEXT)),
+        KeyBinding::new(
+            "secondary-shift-c",
+            workbench::ToggleChat,
+            Some(KEY_CONTEXT),
+        ),
         KeyBinding::new("secondary-r", RefreshSessions, Some(KEY_CONTEXT)),
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-q", Quit, None),

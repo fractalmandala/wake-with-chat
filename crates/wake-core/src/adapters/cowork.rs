@@ -159,11 +159,7 @@ impl AgentAdapter for CoworkAdapter {
         // 选中 Application Support/Claude 形态(含 local-agent-mode-sessions/)
         // 或直接选中该目录都认
         let nested = dir.join("local-agent-mode-sessions");
-        let root = if nested.is_dir() {
-            nested
-        } else {
-            dir
-        };
+        let root = if nested.is_dir() { nested } else { dir };
         Box::new(Self { root })
     }
 

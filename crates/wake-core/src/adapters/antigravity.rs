@@ -271,7 +271,10 @@ impl AntigravityDesktopAdapter {
     fn fingerprint(db: &Path) -> (i64, i64) {
         let mut size = 0i64;
         let mut mtime = 0i64;
-        for path in [db.to_path_buf(), PathBuf::from(format!("{}-wal", db.display()))] {
+        for path in [
+            db.to_path_buf(),
+            PathBuf::from(format!("{}-wal", db.display())),
+        ] {
             if let Ok(meta) = std::fs::metadata(&path) {
                 size += meta.len() as i64;
                 mtime = mtime.max(mtime_ms(&meta));
@@ -306,7 +309,10 @@ impl AntigravityDesktopAdapter {
         // token 逐条累加(usage_tokens 同口径:三项之和)
         let mut tokens_used = 0i64;
         let mut model: Option<String> = None;
-        if let Ok(mut stmt) = ro.conn.prepare("SELECT data FROM gen_metadata ORDER BY idx") {
+        if let Ok(mut stmt) = ro
+            .conn
+            .prepare("SELECT data FROM gen_metadata ORDER BY idx")
+        {
             if let Ok(rows) = stmt.query_map([], |r| r.get::<_, Option<Vec<u8>>>(0)) {
                 for row in rows.flatten().flatten() {
                     if let Some(block) = agy_proto::extract_generation_usage(&row) {
@@ -386,8 +392,16 @@ impl AntigravityDesktopAdapter {
         model: &Option<String>,
     ) -> SessionMeta {
         let title = title_from_messages(messages).unwrap_or_else(|| UNTITLED.to_string());
-        let msg_min = messages.iter().filter_map(|m| m.timestamp).min().unwrap_or(0);
-        let msg_max = messages.iter().filter_map(|m| m.timestamp).max().unwrap_or(0);
+        let msg_min = messages
+            .iter()
+            .filter_map(|m| m.timestamp)
+            .min()
+            .unwrap_or(0);
+        let msg_max = messages
+            .iter()
+            .filter_map(|m| m.timestamp)
+            .max()
+            .unwrap_or(0);
         // 桌面端步骤载荷不携带项目路径(AV 同样留空),不猜
         SessionMeta {
             key: format!("antigravity:{}", r.native_id),

@@ -288,8 +288,7 @@ fn model_name_field(fields: &[Field<'_>], number: u32) -> String {
 fn chat_model_fields<'a>(fields: &'a [Field<'a>]) -> Option<&'a [Field<'a>]> {
     let chat = find(fields, AG_STEP_GENERATOR_METADATA_CHAT_MODEL)?;
     let nested = chat.nested.as_ref()?;
-    let has_usage = find(nested, AG_CHAT_MODEL_METADATA_USAGE)
-        .is_some_and(|f| f.nested.is_some());
+    let has_usage = find(nested, AG_CHAT_MODEL_METADATA_USAGE).is_some_and(|f| f.nested.is_some());
     let has_display = !model_name_field(nested, AG_CHAT_MODEL_METADATA_DISPLAY_NAME).is_empty();
     let has_response = !model_name_field(nested, AG_CHAT_MODEL_METADATA_RESPONSE_MODEL).is_empty();
     (has_usage || has_display || has_response).then_some(nested.as_slice())
@@ -466,7 +465,9 @@ fn is_noisy(s: &str) -> bool {
         return true;
     }
     if s.starts_with('{')
-        && (s.contains("\"toolAction\"") || s.contains("\"toolSummary\"") || s.contains("\"DirectoryPath\""))
+        && (s.contains("\"toolAction\"")
+            || s.contains("\"toolSummary\"")
+            || s.contains("\"DirectoryPath\""))
     {
         return true;
     }
@@ -488,8 +489,7 @@ fn is_noisy(s: &str) -> bool {
 
 /// 非用户步里,纯 URL(无空白)是工具回显的元数据噪声
 fn is_noisy_non_user(s: &str) -> bool {
-    (s.starts_with("http://") || s.starts_with("https://"))
-        && !s.contains([' ', '\t', '\n'])
+    (s.starts_with("http://") || s.starts_with("https://")) && !s.contains([' ', '\t', '\n'])
 }
 
 fn looks_like_opaque_id(s: &str) -> bool {
@@ -613,7 +613,11 @@ mod tests {
         assert_eq!(fields[0].varint, 14);
         let nested = fields[1].nested.as_ref().expect("nested message");
         assert_eq!(nested[0].varint, 42);
-        assert_eq!(collect_strings(&fields, 1).len(), 0, "42 不是合法 UTF-8 长串");
+        assert_eq!(
+            collect_strings(&fields, 1).len(),
+            0,
+            "42 不是合法 UTF-8 长串"
+        );
     }
 
     #[test]

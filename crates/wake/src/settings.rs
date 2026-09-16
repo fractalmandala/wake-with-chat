@@ -282,8 +282,11 @@ impl SettingsView {
             let dialect = wake_core::services::acp::acp_dialect(agent).expect("filtered");
             let entry = auth.get(agent.as_str()).cloned().unwrap_or_default();
             let key = dialect.auth_key_env.map(|env_name| {
-                let state = cx
-                    .new(|cx| InputState::new(window, cx).masked(true).placeholder(env_name));
+                let state = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .masked(true)
+                        .placeholder(env_name)
+                });
                 state.update(cx, |state, cx| state.set_value(&entry.api_key, window, cx));
                 auth_subs.push(cx.subscribe_in(
                     &state,
@@ -317,7 +320,9 @@ impl SettingsView {
                     .auto_grow(2, 6)
                     .placeholder("NAME=VALUE")
             });
-            extra.update(cx, |state, cx| state.set_value(&entry.extra_env, window, cx));
+            extra.update(cx, |state, cx| {
+                state.set_value(&entry.extra_env, window, cx)
+            });
             auth_subs.push(cx.subscribe_in(
                 &extra,
                 window,
@@ -1635,8 +1640,7 @@ impl SettingsView {
             .auth_rows
             .iter()
             .map(|row| {
-                let dialect =
-                    wake_core::services::acp::acp_dialect(row.agent).expect("filtered");
+                let dialect = wake_core::services::acp::acp_dialect(row.agent).expect("filtered");
                 let dot = rgb(agent_series_color(row.agent));
                 let mut card = v_flex()
                     .w_full()
@@ -1680,8 +1684,11 @@ impl SettingsView {
                     card = card.child(self.auth_field_row(t("API key"), key.clone(), cx));
                 }
                 if let Some(base) = &row.base {
-                    card = card
-                        .child(self.auth_field_row(t("API endpoint (optional)"), base.clone(), cx));
+                    card = card.child(self.auth_field_row(
+                        t("API endpoint (optional)"),
+                        base.clone(),
+                        cx,
+                    ));
                 }
                 card = card.child(
                     v_flex()

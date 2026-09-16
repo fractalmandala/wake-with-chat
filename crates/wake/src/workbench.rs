@@ -2628,23 +2628,27 @@ impl Workbench {
     ) {
         self.chat_panel.take();
         let panel = crate::chat::ChatPanel::open(agent, cwd, resume, window, cx);
-        let sub = cx.subscribe_in(&panel, window, |this, _, ev: &crate::chat::ChatPanelEvent, _, cx| {
-            match ev {
-                crate::chat::ChatPanelEvent::Close => {
-                    this.chat_panel = None;
-                    cx.notify();
+        let sub = cx.subscribe_in(
+            &panel,
+            window,
+            |this, _, ev: &crate::chat::ChatPanelEvent, _, cx| {
+                match ev {
+                    crate::chat::ChatPanelEvent::Close => {
+                        this.chat_panel = None;
+                        cx.notify();
+                    }
+                    // 错误卡的 Open Settings:面板保持打开,设置窗叠上来
+                    crate::chat::ChatPanelEvent::OpenSettings => {
+                        this.open_settings(cx);
+                    }
+                    // 面板刚写过登记簿,左栏 Chats 区重读
+                    crate::chat::ChatPanelEvent::RegistryDirty => {
+                        this.refresh_chat_records();
+                        cx.notify();
+                    }
                 }
-                // 错误卡的 Open Settings:面板保持打开,设置窗叠上来
-                crate::chat::ChatPanelEvent::OpenSettings => {
-                    this.open_settings(cx);
-                }
-                // 面板刚写过登记簿,左栏 Chats 区重读
-                crate::chat::ChatPanelEvent::RegistryDirty => {
-                    this.refresh_chat_records();
-                    cx.notify();
-                }
-            }
-        });
+            },
+        );
         self._subs.push(sub);
         self.chat_panel = Some(panel);
         cx.notify();
@@ -4714,12 +4718,7 @@ impl Workbench {
     /// 会话,把 handoff 提示预填进 composer。复用规则:面板已开且是同一
     /// agent 就在现有会话上预填;否则换面板(agent 不同时旧子进程随面板
     /// 丢弃而收掉)。写稿在后台,完成后经 update_in 拿 window 预填
-    fn do_continue_in_wake(
-        &mut self,
-        agent: AgentId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn do_continue_in_wake(&mut self, agent: AgentId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(detail) = &self.detail else { return };
         let meta = detail.meta.clone();
         let adapters = self.adapters.clone();
@@ -5264,41 +5263,45 @@ impl Workbench {
                                     .child(t("No chats yet")),
                             )
                         })
-                        .children(self.chat_records.iter().enumerate().map(|(ix, r)| {
-                            let record = r.clone();
-                            // 标题优先用 agent 库里模型起的名(会话入库后异步
-                            // 可见),登记簿的首句标题只作回退
-                            let title = self
-                                .chat_titles
-                                .get(&record.session_id)
-                                .cloned()
-                                .filter(|t| !t.trim().is_empty())
-                                .unwrap_or_else(|| {
-                                    if record.title.is_empty() {
-                                        t("Untitled chat").to_string()
-                                    } else {
-                                        record.title.clone()
-                                    }
+                        .children(
+                            self.chat_records.iter().enumerate().map(|(ix, r)| {
+                                let record = r.clone();
+                                // 标题优先用 agent 库里模型起的名(会话入库后异步
+                                // 可见),登记簿的首句标题只作回退
+                                let title = self
+                                    .chat_titles
+                                    .get(&record.session_id)
+                                    .cloned()
+                                    .filter(|t| !t.trim().is_empty())
+                                    .unwrap_or_else(|| {
+                                        if record.title.is_empty() {
+                                            t("Untitled chat").to_string()
+                                        } else {
+                                            record.title.clone()
+                                        }
+                                    });
+                                // 首句常是 "hi" 这类问候,模型徽章帮着区分会话;
+                                // 只留最后一段(provider/model 的 model 部分)
+                                let tag = record.model.as_deref().map(|m| {
+                                    SharedString::from(
+                                        m.rsplit('/').next().unwrap_or(m).to_string(),
+                                    )
                                 });
-                            // 首句常是 "hi" 这类问候,模型徽章帮着区分会话;
-                            // 只留最后一段(provider/model 的 model 部分)
-                            let tag = record.model.as_deref().map(|m| {
-                                SharedString::from(m.rsplit('/').next().unwrap_or(m).to_string())
-                            });
-                            sidebar_row(
-                                ("chat", ix),
-                                RowLead::Icon(icon("icons/message-square.svg")),
-                                title,
-                                None,
-                                false,
-                                RowLevel::Sub,
-                                cx.listener(move |this, _, window, cx| {
-                                    this.open_saved_chat(record.clone(), window, cx);
-                                }),
-                                tag,
-                                cx,
-                            )
-                        }))
+                                sidebar_row(
+                                    ("chat", ix),
+                                    RowLead::Icon(icon("icons/message-square.svg")),
+                                    title,
+                                    None,
+                                    false,
+                                    RowLevel::Sub,
+                                    cx.listener(move |this, _, window, cx| {
+                                        this.open_saved_chat(record.clone(), window, cx);
+                                    }),
+                                    tag,
+                                    cx,
+                                )
+                            }),
+                        )
                     }),
             )
             // 底部工具条:次要操作(数据源、刷新)与扫描状态同处一区,与上方
@@ -5346,7 +5349,8 @@ impl Workbench {
                                 t("Agent chat"),
                                 true,
                                 {
-                                    let mut ic = icon("icons/message-square.svg").with_size(px(14.));
+                                    let mut ic =
+                                        icon("icons/message-square.svg").with_size(px(14.));
                                     if self.chat_panel.is_some() {
                                         ic = ic.text_color(theme.primary);
                                     }
@@ -5519,10 +5523,8 @@ impl Workbench {
                                     .text_color(theme.foreground)
                                     .child(title)
                                     .tooltip(move |window, cx| {
-                                        gpui_component::tooltip::Tooltip::new(
-                                            title_tooltip.clone(),
-                                        )
-                                        .build(window, cx)
+                                        gpui_component::tooltip::Tooltip::new(title_tooltip.clone())
+                                            .build(window, cx)
                                     }),
                             )
                             .child(
@@ -5536,11 +5538,7 @@ impl Workbench {
                                             .flex_shrink_0(),
                                     )
                                     .when_some(source, |this, m| {
-                                        this.child(badge(
-                                            m,
-                                            theme.muted,
-                                            theme.muted_foreground,
-                                        ))
+                                        this.child(badge(m, theme.muted, theme.muted_foreground))
                                     })
                                     .child(div().flex_1())
                                     .child(
@@ -5567,9 +5565,8 @@ impl Workbench {
         let library_empty = self.session_total() == 0;
         let listed_count = self.total_sessions.max(0);
         // 页签只在无过滤的 All Sessions 视图出现;过滤态永远列会话
-        let tabs_visible = self.selected_agent.is_none()
-            && self.selected_project.is_none()
-            && !self.favorite_only;
+        let tabs_visible =
+            self.selected_agent.is_none() && self.selected_project.is_none() && !self.favorite_only;
         let chats_tab = self.chats_tab && tabs_visible;
         let heading: SharedString = if chats_tab {
             t("Chats").into()
@@ -5699,7 +5696,9 @@ impl Workbench {
                                     .pt(px(2.))
                                     .gap(SPACE_SM)
                                     // Chats 页签没有排序概念,排序按钮只在 Sessions 侧出现
-                                    .when(tabs_visible, |this| this.child(self.render_scope_tabs(cx)))
+                                    .when(tabs_visible, |this| {
+                                        this.child(self.render_scope_tabs(cx))
+                                    })
                                     .when(!chats_tab, |this| this.child(sort_menu)),
                             ),
                     ),
@@ -9254,9 +9253,7 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &OpenSettings, _window, cx| this.open_settings(cx)))
             .on_action(cx.listener(|this, _: &OpenUpdates, _window, cx| this.open_updates(cx)))
             .on_action(cx.listener(|this, _: &OpenAbout, _window, cx| this.open_about(cx)))
-            .on_action(cx.listener(|this, _: &ToggleChat, window, cx| {
-                this.toggle_chat(window, cx)
-            }))
+            .on_action(cx.listener(|this, _: &ToggleChat, window, cx| this.toggle_chat(window, cx)))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.update_detail_selection_auto_scroll(event, window, cx)
             }))

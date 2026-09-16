@@ -197,8 +197,14 @@ pub fn acp_targets() -> Vec<AgentId> {
 pub enum PromptBlock {
     Text(String),
     /// data = base64 编码的文件内容
-    Image { data: String, mime: String },
-    ResourceLink { uri: String, name: String },
+    Image {
+        data: String,
+        mime: String,
+    },
+    ResourceLink {
+        uri: String,
+        name: String,
+    },
 }
 
 impl PromptBlock {
@@ -315,9 +321,9 @@ impl AcpSession {
     ) -> anyhow::Result<(AcpSession, Receiver<ChatEvent>)> {
         let d = acp_dialect(agent)
             .ok_or_else(|| anyhow::anyhow!("{} does not support ACP chat", agent.display_name()))?;
-        let bin = d
-            .bin
-            .unwrap_or_else(|| terminal::agent_bin(agent).expect("dialect covers agents with a bin"));
+        let bin = d.bin.unwrap_or_else(|| {
+            terminal::agent_bin(agent).expect("dialect covers agents with a bin")
+        });
         let cli = terminal::cli_bin_path(bin)
             .ok_or_else(|| anyhow::anyhow!("agent CLI `{bin}` was not found on PATH"))?;
         let mut command = Command::new(&cli);
@@ -562,7 +568,10 @@ impl AcpSession {
         std::thread::spawn(move || match rx.recv() {
             Ok(Ok(v)) => {
                 let _ = event_tx.send(ChatEvent::TurnDone {
-                    stop_reason: v.get("stopReason").and_then(Value::as_str).map(str::to_string),
+                    stop_reason: v
+                        .get("stopReason")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                 });
             }
             // agent 中途退出等:pump 会把挂起请求全部放 Err 出来
@@ -649,8 +658,10 @@ impl AcpSession {
     /// 运行时切换权限策略:泵线程经共享标志读到最新值,无需重启会话。
     /// &self 即可:live_policy 是原子量(会话经 Arc 共享,UI 只拿到 &AcpSession)
     pub fn set_policy(&self, policy: PermissionPolicy) {
-        self.live_policy
-            .store(matches!(policy, PermissionPolicy::AutoApprove), Ordering::Relaxed);
+        self.live_policy.store(
+            matches!(policy, PermissionPolicy::AutoApprove),
+            Ordering::Relaxed,
+        );
     }
 
     /// 退出诊断:子进程意外结束时给 UI 的错误文案素材
@@ -718,9 +729,7 @@ fn pump(
     } else {
         format!(" stderr: {tail}")
     };
-    let _ = event_tx.send(ChatEvent::AgentError(format!(
-        "ACP agent exited.{detail}"
-    )));
+    let _ = event_tx.send(ChatEvent::AgentError(format!("ACP agent exited.{detail}")));
     // 兜底:所有挂起的请求立刻醒过来报错,别让调用方干等 120s
     for (_, tx) in pending.lock().unwrap().drain() {
         let _ = tx.send(Err("ACP agent exited".to_string()));
@@ -888,17 +897,20 @@ fn handle_notification(msg: &Value, event_tx: &Sender<ChatEvent>) {
                 return;
             };
             // content 块数组里可能带工具输出(text 块);取全部 text 拼接
-            let output = update.get("content").and_then(Value::as_array).map(|blocks| {
-                blocks
-                    .iter()
-                    .filter_map(|b| {
-                        b.get("text")
-                            .and_then(Value::as_str)
-                            .or_else(|| b.get("data").and_then(Value::as_str))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            });
+            let output = update
+                .get("content")
+                .and_then(Value::as_array)
+                .map(|blocks| {
+                    blocks
+                        .iter()
+                        .filter_map(|b| {
+                            b.get("text")
+                                .and_then(Value::as_str)
+                                .or_else(|| b.get("data").and_then(Value::as_str))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                });
             let _ = event_tx.send(ChatEvent::ToolCall {
                 id,
                 title: update
@@ -981,8 +993,13 @@ mod tests {
     fn harness(policy: PermissionPolicy, cwd: PathBuf) -> Harness {
         let (a0, a1) = UnixStream::pair().expect("socket pair");
         let (b0, b1) = UnixStream::pair().expect("socket pair");
-        let (events, session) =
-            AcpSession::over(Box::new(a0), Box::new(BufReader::new(b0)), None, cwd, policy);
+        let (events, session) = AcpSession::over(
+            Box::new(a0),
+            Box::new(BufReader::new(b0)),
+            None,
+            cwd,
+            policy,
+        );
         let client_log: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
         {
             let log = client_log.clone();
@@ -1008,14 +1025,14 @@ mod tests {
                         let _ = out.write_all(s.as_bytes());
                     };
                     match method {
-                        "initialize" => reply(&mut out, json!({
-                            "protocolVersion": 1,
-                            "agentCapabilities": { "loadSession": true },
-                        })),
-                        "session/new" => reply(
+                        "initialize" => reply(
                             &mut out,
-                            json!({ "sessionId": "sess-1" }),
+                            json!({
+                                "protocolVersion": 1,
+                                "agentCapabilities": { "loadSession": true },
+                            }),
                         ),
+                        "session/new" => reply(&mut out, json!({ "sessionId": "sess-1" })),
                         _ => {}
                     }
                 }
@@ -1066,10 +1083,7 @@ mod tests {
     }
 
     /// 等到第一个满足谓词的事件(其余按序丢进 keep)
-    fn wait_event(
-        h: &Harness,
-        pred: impl Fn(&ChatEvent) -> bool,
-    ) -> (ChatEvent, Vec<ChatEvent>) {
+    fn wait_event(h: &Harness, pred: impl Fn(&ChatEvent) -> bool) -> (ChatEvent, Vec<ChatEvent>) {
         let mut seen = Vec::new();
         loop {
             let e = h
@@ -1171,7 +1185,9 @@ mod tests {
         assert_eq!(blocks[2]["type"], "resource_link");
         assert_eq!(blocks[2]["uri"], "file:///tmp/notes.md");
         let (user, _) = wait_event(&h, |e| matches!(e, ChatEvent::UserMessage(_)));
-        let ChatEvent::UserMessage(text) = user else { unreachable!() };
+        let ChatEvent::UserMessage(text) = user else {
+            unreachable!()
+        };
         assert_eq!(text, "look at this");
     }
 
@@ -1180,18 +1196,40 @@ mod tests {
     fn full_turn_streams_and_ends() {
         let mut h = harness(PermissionPolicy::Ask, std::env::temp_dir());
         handshake(&mut h);
-        h.session.prompt(&[PromptBlock::text("hi")]).expect("prompt");
+        h.session
+            .prompt(&[PromptBlock::text("hi")])
+            .expect("prompt");
         assert_eq!(logged(&h, 2)["method"], "session/prompt");
         assert_eq!(logged(&h, 2)["params"]["prompt"][0]["text"], "hi");
         let prompt_id = logged(&h, 2)["id"].clone();
-        write_msg(&h, json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello "}}}}));
-        write_msg(&h, json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}}));
-        write_msg(&h, json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Read file","kind":"read","status":"pending"}}}));
-        write_msg(&h, json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","title":"Read file","kind":"read","status":"completed","content":[{"type":"text","text":"file body"}]}}}));
-        write_msg(&h, json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"usage_update","totalTokens":1234}}}));
-        write_msg(&h, json!({"jsonrpc":"2.0","id":prompt_id,"result":{"stopReason":"end_turn"}}));
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello "}}}}),
+        );
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}}),
+        );
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Read file","kind":"read","status":"pending"}}}),
+        );
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","title":"Read file","kind":"read","status":"completed","content":[{"type":"text","text":"file body"}]}}}),
+        );
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"usage_update","totalTokens":1234}}}),
+        );
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","id":prompt_id,"result":{"stopReason":"end_turn"}}),
+        );
         let (done, seen) = wait_event(&h, |e| matches!(e, ChatEvent::TurnDone { .. }));
-        let ChatEvent::TurnDone { stop_reason } = done else { unreachable!() };
+        let ChatEvent::TurnDone { stop_reason } = done else {
+            unreachable!()
+        };
         assert_eq!(stop_reason.as_deref(), Some("end_turn"));
         let mut text = String::new();
         let mut tool_done = false;
@@ -1200,7 +1238,9 @@ mod tests {
             match e {
                 ChatEvent::UserMessage(t) => assert_eq!(t, "hi"),
                 ChatEvent::AssistantDelta(t) => text.push_str(&t),
-                ChatEvent::ToolCall { id, status, output, .. } => {
+                ChatEvent::ToolCall {
+                    id, status, output, ..
+                } => {
                     assert_eq!(id, "t1");
                     if status == "completed" {
                         assert_eq!(output.as_deref(), Some("file body"));
@@ -1221,13 +1261,22 @@ mod tests {
     fn permission_ask_roundtrip() {
         let mut h = harness(PermissionPolicy::Ask, std::env::temp_dir());
         handshake(&mut h);
-        h.session.prompt(&[PromptBlock::text("go")]).expect("prompt");
+        h.session
+            .prompt(&[PromptBlock::text("go")])
+            .expect("prompt");
         let prompt_id = logged(&h, 2)["id"].clone();
-        write_msg(&h, json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"tool_call","toolCallId":"t9","title":"Run cmd","kind":"execute","status":"pending"}}}));
-        write_msg(&h, json!({"jsonrpc":"2.0","id":10,"method":"session/request_permission","params":{"sessionId":"sess-1","toolCall":{"toolCallId":"t9","title":"Run cmd"},"options":[{"optionId":"a1","name":"Allow once","kind":"allow_once"},{"optionId":"r1","name":"Reject","kind":"reject_once"}]}}));
-        let (req, seen) =
-            wait_event(&h, |e| matches!(e, ChatEvent::PermissionRequest(_)));
-        let ChatEvent::PermissionRequest(req) = req else { unreachable!() };
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"tool_call","toolCallId":"t9","title":"Run cmd","kind":"execute","status":"pending"}}}),
+        );
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","id":10,"method":"session/request_permission","params":{"sessionId":"sess-1","toolCall":{"toolCallId":"t9","title":"Run cmd"},"options":[{"optionId":"a1","name":"Allow once","kind":"allow_once"},{"optionId":"r1","name":"Reject","kind":"reject_once"}]}}),
+        );
+        let (req, seen) = wait_event(&h, |e| matches!(e, ChatEvent::PermissionRequest(_)));
+        let ChatEvent::PermissionRequest(req) = req else {
+            unreachable!()
+        };
         assert_eq!(req.request_id, 10);
         assert_eq!(req.tool_call_id.as_deref(), Some("t9"));
         assert_eq!(req.options.len(), 2);
@@ -1245,12 +1294,13 @@ mod tests {
         let reply = logged(&h, 3);
         assert_eq!(reply["result"]["outcome"]["outcome"], "selected");
         assert_eq!(reply["result"]["outcome"]["optionId"], "a1");
-        write_msg(&h, json!({"jsonrpc":"2.0","id":prompt_id,"result":{"stopReason":"end_turn"}}));
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","id":prompt_id,"result":{"stopReason":"end_turn"}}),
+        );
         let _ = wait_event(&h, |e| matches!(e, ChatEvent::TurnDone { .. }));
         // 上浮序列里不该混进 AgentError
-        assert!(!seen
-            .iter()
-            .any(|e| matches!(e, ChatEvent::AgentError(_))));
+        assert!(!seen.iter().any(|e| matches!(e, ChatEvent::AgentError(_))));
     }
 
     /// AutoApprove:不产生事件,自动选 allow_always(退而求 allow_once)
@@ -1258,9 +1308,14 @@ mod tests {
     fn permission_auto_approve_prefers_allow_always() {
         let mut h = harness(PermissionPolicy::AutoApprove, std::env::temp_dir());
         handshake(&mut h);
-        h.session.prompt(&[PromptBlock::text("go")]).expect("prompt");
+        h.session
+            .prompt(&[PromptBlock::text("go")])
+            .expect("prompt");
         let prompt_id = logged(&h, 2)["id"].clone();
-        write_msg(&h, json!({"jsonrpc":"2.0","id":10,"method":"session/request_permission","params":{"sessionId":"sess-1","options":[{"optionId":"a1","name":"Allow once","kind":"allow_once"},{"optionId":"a2","name":"Always","kind":"allow_always"},{"optionId":"r1","name":"Reject","kind":"reject_once"}]}}));
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","id":10,"method":"session/request_permission","params":{"sessionId":"sess-1","options":[{"optionId":"a1","name":"Allow once","kind":"allow_once"},{"optionId":"a2","name":"Always","kind":"allow_always"},{"optionId":"r1","name":"Reject","kind":"reject_once"}]}}),
+        );
         for _ in 0..100 {
             let log = h.client_log.lock().unwrap();
             if log.len() > 3 {
@@ -1271,13 +1326,14 @@ mod tests {
         }
         let reply = logged(&h, 3);
         assert_eq!(reply["result"]["outcome"]["optionId"], "a2");
-        write_msg(&h, json!({"jsonrpc":"2.0","id":prompt_id,"result":{"stopReason":"end_turn"}}));
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","id":prompt_id,"result":{"stopReason":"end_turn"}}),
+        );
         // 整个回合只有 UserMessage 与 TurnDone,权限请求不上浮
         let (done, seen) = wait_event(&h, |e| matches!(e, ChatEvent::TurnDone { .. }));
         assert!(matches!(done, ChatEvent::TurnDone { .. }));
-        assert!(seen
-            .iter()
-            .all(|e| matches!(e, ChatEvent::UserMessage(_))));
+        assert!(seen.iter().all(|e| matches!(e, ChatEvent::UserMessage(_))));
     }
 
     /// 垃圾行不炸泵,后续正常消息照收
@@ -1285,20 +1341,28 @@ mod tests {
     fn malformed_lines_are_skipped() {
         let mut h = harness(PermissionPolicy::Ask, std::env::temp_dir());
         handshake(&mut h);
-        h.session.prompt(&[PromptBlock::text("hi")]).expect("prompt");
+        h.session
+            .prompt(&[PromptBlock::text("hi")])
+            .expect("prompt");
         let prompt_id = logged(&h, 2)["id"].clone();
         // agent 侧混入的非协议输出:直接写裸文本行
         use std::io::Write;
         let mut w = h.agent_out.try_clone().expect("clone agent out");
         w.write_all(b"this is not json at all\n")
             .expect("write garbage");
-        write_msg(&h, json!({"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}}}));
-        write_msg(&h, json!({"jsonrpc":"2.0","id":prompt_id,"result":{"stopReason":"end_turn"}}));
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}}}),
+        );
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","id":prompt_id,"result":{"stopReason":"end_turn"}}),
+        );
         let (done, seen) = wait_event(&h, |e| matches!(e, ChatEvent::TurnDone { .. }));
         assert!(matches!(done, ChatEvent::TurnDone { .. }));
-        assert!(seen.iter().any(
-            |e| matches!(e, ChatEvent::AssistantDelta(t) if t == "ok")
-        ));
+        assert!(seen
+            .iter()
+            .any(|e| matches!(e, ChatEvent::AssistantDelta(t) if t == "ok")));
     }
 
     /// 子进程退出:挂起请求立刻放错,事件流收到 AgentError
@@ -1331,13 +1395,21 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut h = harness(PermissionPolicy::Ask, dir.clone());
         handshake(&mut h);
-        h.session.prompt(&[PromptBlock::text("go")]).expect("prompt");
+        h.session
+            .prompt(&[PromptBlock::text("go")])
+            .expect("prompt");
         let inside = dir.join("note.txt");
         std::fs::write(&inside, "v1").unwrap();
-        write_msg(&h, json!({"jsonrpc":"2.0","id":20,"method":"fs/read_text_file","params":{"path": inside.display().to_string()}}));
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","id":20,"method":"fs/read_text_file","params":{"path": inside.display().to_string()}}),
+        );
         let reply = logged(&h, 3);
         assert_eq!(reply["result"]["content"], "v1");
-        write_msg(&h, json!({"jsonrpc":"2.0","id":21,"method":"fs/read_text_file","params":{"path":"/etc/hosts"}}));
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","id":21,"method":"fs/read_text_file","params":{"path":"/etc/hosts"}}),
+        );
         for _ in 0..100 {
             let log = h.client_log.lock().unwrap();
             if log.len() > 4 {
@@ -1348,7 +1420,10 @@ mod tests {
         }
         let reply = logged(&h, 4);
         assert!(reply.get("error").is_some());
-        write_msg(&h, json!({"jsonrpc":"2.0","id":22,"method":"fs/write_text_file","params":{"path": inside.display().to_string(),"content":"v2"}}));
+        write_msg(
+            &h,
+            json!({"jsonrpc":"2.0","id":22,"method":"fs/write_text_file","params":{"path": inside.display().to_string(),"content":"v2"}}),
+        );
         for _ in 0..100 {
             let log = h.client_log.lock().unwrap();
             if log.len() > 5 {
@@ -1390,7 +1465,11 @@ mod tests {
         for agent in [AgentId::Kimi, AgentId::Opencode, AgentId::Cursor] {
             let d = acp_dialect(agent).unwrap();
             assert!(d.auth_key_env.is_none());
-            assert!(d.auth_hint.is_some(), "{} should hint at CLI login", agent.as_str());
+            assert!(
+                d.auth_hint.is_some(),
+                "{} should hint at CLI login",
+                agent.as_str()
+            );
         }
     }
 
@@ -1438,8 +1517,7 @@ mod tests {
                         let _ = out.write_all(s.as_bytes());
                     } else {
                         use std::io::Write;
-                        let s = json!({"jsonrpc":"2.0","id":id,"result":Value::Null})
-                            .to_string()
+                        let s = json!({"jsonrpc":"2.0","id":id,"result":Value::Null}).to_string()
                             + "\n";
                         let _ = out.write_all(s.as_bytes());
                     }

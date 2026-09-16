@@ -88,17 +88,17 @@ taking over. Continue that work from where it left off.",
 
 /// 导出并写交接稿到 `~/.wake/handoffs/`,返回文件路径。文件名与导出同构
 /// (agent-标题-日期),前缀 handoff- 与用户自己的导出区分开
-pub fn write_handoff(
-    adapter: &dyn AgentAdapter,
-    meta: &SessionMeta,
-) -> anyhow::Result<PathBuf> {
+pub fn write_handoff(adapter: &dyn AgentAdapter, meta: &SessionMeta) -> anyhow::Result<PathBuf> {
     let dir = dirs::home_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join(".wake")
         .join("handoffs");
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("cannot create handoff dir {}", dir.display()))?;
-    let path = dir.join(format!("handoff-{}", exporter::default_file_name(meta, "md")));
+    let path = dir.join(format!(
+        "handoff-{}",
+        exporter::default_file_name(meta, "md")
+    ));
     std::fs::write(&path, handoff_doc(adapter, meta)?)
         .with_context(|| format!("cannot write handoff file {}", path.display()))?;
     Ok(path)
@@ -138,10 +138,7 @@ fn truncate_transcript(body: &str, budget: usize) -> String {
     if body.len() <= budget {
         return body.to_string();
     }
-    let starts: Vec<usize> = body
-        .match_indices("\n### ")
-        .map(|(i, _)| i + 1)
-        .collect();
+    let starts: Vec<usize> = body.match_indices("\n### ").map(|(i, _)| i + 1).collect();
     if starts.is_empty() {
         // 整篇没有消息块(退化转录):按字符边界硬切尾部
         return cut_tail(body, budget);
@@ -224,7 +221,11 @@ pub struct HandoffPlan {
 
 /// 拼装接力启动件。cwd 取会话项目目录(在才 cd——目录消失时退化为
 /// 在默认目录开新会话,上下文在稿子里,照样接得上)
-fn build_plan(meta: &SessionMeta, target: HandoffTarget, path: &Path) -> anyhow::Result<HandoffPlan> {
+fn build_plan(
+    meta: &SessionMeta,
+    target: HandoffTarget,
+    path: &Path,
+) -> anyhow::Result<HandoffPlan> {
     let cli = terminal::cli_path(target.agent).ok_or_else(|| {
         anyhow::anyhow!(
             "Agent CLI `{}` for {} was not found on PATH",
@@ -266,14 +267,11 @@ pub fn continue_with(
     target: HandoffTarget,
     term: terminal::TerminalApp,
 ) -> Result<String, String> {
-    let path = write_handoff(adapter, meta)
-        .map_err(|e| format!("Handoff export failed: {e}"))?;
-    let plan = build_plan(meta, target, &path)
-        .map_err(|e| format!("Handoff launch failed: {e}"))?;
+    let path = write_handoff(adapter, meta).map_err(|e| format!("Handoff export failed: {e}"))?;
+    let plan =
+        build_plan(meta, target, &path).map_err(|e| format!("Handoff launch failed: {e}"))?;
     let command = terminal::compose_in(term, &plan.cli, &plan.args, plan.cwd.as_deref());
-    if target.form == PromptForm::ClipboardOnly
-        && !terminal::copy_to_clipboard(&plan.prompt)
-    {
+    if target.form == PromptForm::ClipboardOnly && !terminal::copy_to_clipboard(&plan.prompt) {
         return Err(format!(
             "Couldn't copy the handoff prompt to the clipboard. It reads: {}",
             plan.prompt
@@ -287,7 +285,11 @@ pub fn continue_with(
             path.display(),
             target.agent.display_name()
         ),
-        _ => format!("Continuing with {}: {}", target.agent.display_name(), command),
+        _ => format!(
+            "Continuing with {}: {}",
+            target.agent.display_name(),
+            command
+        ),
     })
 }
 
@@ -303,7 +305,10 @@ mod tests {
         assert_eq!(prompt_form(AgentId::Gemini), PromptForm::Arg);
         assert_eq!(prompt_form(AgentId::Grok), PromptForm::Arg);
         assert_eq!(prompt_form(AgentId::Cursor), PromptForm::Arg);
-        assert_eq!(prompt_form(AgentId::Antigravity), PromptForm::InteractiveFlag);
+        assert_eq!(
+            prompt_form(AgentId::Antigravity),
+            PromptForm::InteractiveFlag
+        );
         assert_eq!(prompt_form(AgentId::Kimi), PromptForm::ClipboardOnly);
         assert_eq!(prompt_form(AgentId::Opencode), PromptForm::ClipboardOnly);
         assert_eq!(prompt_form(AgentId::Dsh), PromptForm::ClipboardOnly);

@@ -44,12 +44,10 @@ const CHAT_WIDTH_DEFAULT: f32 = 440.;
 const ATTACH_IMAGE_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 fn load_width() -> Pixels {
-    px(
-        crate::prefs::read(CHAT_WIDTH_PREF)
-            .and_then(|text| text.trim().parse::<f32>().ok())
-            .map(|w| w.clamp(CHAT_WIDTH_MIN, CHAT_WIDTH_MAX))
-            .unwrap_or(CHAT_WIDTH_DEFAULT),
-    )
+    px(crate::prefs::read(CHAT_WIDTH_PREF)
+        .and_then(|text| text.trim().parse::<f32>().ok())
+        .map(|w| w.clamp(CHAT_WIDTH_MIN, CHAT_WIDTH_MAX))
+        .unwrap_or(CHAT_WIDTH_DEFAULT))
 }
 
 // ---------------------------------------------------------------- 时间线模型
@@ -227,9 +225,7 @@ impl ChatPanel {
             resume,
             registered: false,
             model_choices: Vec::new(),
-            model_search: cx.new(|cx| {
-                InputState::new(window, cx).placeholder(t("Search models"))
-            }),
+            model_search: cx.new(|cx| InputState::new(window, cx).placeholder(t("Search models"))),
             _subs: vec![sub],
         };
         panel.start_session(cx);
@@ -293,7 +289,10 @@ impl ChatPanel {
         });
         cx.spawn(async move |this, cx| {
             while let Some(ev) = rx.next().await {
-                if this.update(cx, |this, cx| this.on_ui_event(ev, cx)).is_err() {
+                if this
+                    .update(cx, |this, cx| this.on_ui_event(ev, cx))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -389,10 +388,7 @@ impl ChatPanel {
                     self.items.push(ChatItem::Tool(ToolCallView {
                         id,
                         name,
-                        input_preview: input
-                            .as_ref()
-                            .map(|v| compact_json(v))
-                            .unwrap_or_default(),
+                        input_preview: input.as_ref().map(|v| compact_json(v)).unwrap_or_default(),
                         input: input.map(|v| pretty_json(&v)),
                         output,
                         is_error: status == "failed",
@@ -423,12 +419,7 @@ impl ChatPanel {
 
     /// 发送一轮。附件并入 prompt 内容块(图片 base64、其余 resource_link),
     /// composer 的清理走传入的 entity(订阅回调与 Send 按钮共用)
-    fn send(
-        &mut self,
-        input: &Entity<TextareaState>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn send(&mut self, input: &Entity<TextareaState>, window: &mut Window, cx: &mut Context<Self>) {
         let text = input.read(cx).value().trim().to_string();
         if (text.is_empty() && self.pending_attachments.is_empty())
             || self.in_flight
@@ -596,7 +587,10 @@ impl ChatPanel {
 
     fn persist_width(&mut self) {
         self.saved_width = self.width;
-        let _ = crate::prefs::write(CHAT_WIDTH_PREF, format!("{:.0}", f32::from(self.width)).as_bytes());
+        let _ = crate::prefs::write(
+            CHAT_WIDTH_PREF,
+            format!("{:.0}", f32::from(self.width)).as_bytes(),
+        );
     }
 
     fn set_policy(&mut self, policy: PermissionPolicy, cx: &mut Context<Self>) {
@@ -696,10 +690,8 @@ impl ChatPanel {
                         let query = search.read(cx).value().trim().to_lowercase();
                         // 分组:展示名 "Provider/Model" 的前缀优先,退回值前缀;
                         // 搜索同时匹配值与展示名,过滤后组照常保留
-                        let mut groups: std::collections::BTreeMap<
-                            String,
-                            Vec<(String, String)>,
-                        > = std::collections::BTreeMap::new();
+                        let mut groups: std::collections::BTreeMap<String, Vec<(String, String)>> =
+                            std::collections::BTreeMap::new();
                         let mut total = 0usize;
                         for (value, name) in &options {
                             let hits = query.is_empty()
@@ -716,7 +708,10 @@ impl ChatPanel {
                             } else {
                                 t("Models").to_string()
                             };
-                            groups.entry(provider).or_default().push((value.clone(), name.clone()));
+                            groups
+                                .entry(provider)
+                                .or_default()
+                                .push((value.clone(), name.clone()));
                         }
                         let pop = cx.entity();
                         let mut rows: Vec<AnyElement> = Vec::new();
@@ -748,13 +743,7 @@ impl ChatPanel {
                                         .cursor_pointer()
                                         .when(selected, |row| row.bg(theme.muted))
                                         .hover(|row| row.bg(theme.muted))
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .truncate()
-                                                .child(name),
-                                        )
+                                        .child(div().flex_1().min_w_0().truncate().child(name))
                                         .when(selected, |row| {
                                             row.child(
                                                 Icon::empty()
@@ -766,11 +755,7 @@ impl ChatPanel {
                                             // 选中即收浮层,再切本地副本 + set_config
                                             pop.update(cx, |s, cx| s.set_open(false, cx));
                                             entity.update(cx, |this, cx| {
-                                                this.set_model(
-                                                    config_id.clone(),
-                                                    value.clone(),
-                                                    cx,
-                                                )
+                                                this.set_model(config_id.clone(), value.clone(), cx)
                                             });
                                         })
                                         .into_any_element(),
@@ -837,12 +822,24 @@ impl ChatPanel {
             .ghost()
             .rounded(RADIUS_BUTTON)
             .label(label)
-            .icon(Icon::empty().path("icons/chevron-down.svg").with_size(px(12.)))
+            .icon(
+                Icon::empty()
+                    .path("icons/chevron-down.svg")
+                    .with_size(px(12.)),
+            )
             .tooltip(t("Permission mode"))
             .dropdown_menu(move |mut menu, _, _| {
                 for (policy, title, sub) in [
-                    (PermissionPolicy::Ask, "Ask every time", "Approve each action"),
-                    (PermissionPolicy::AutoApprove, "Auto-approve", "Run without asking"),
+                    (
+                        PermissionPolicy::Ask,
+                        "Ask every time",
+                        "Approve each action",
+                    ),
+                    (
+                        PermissionPolicy::AutoApprove,
+                        "Auto-approve",
+                        "Run without asking",
+                    ),
                 ] {
                     let entity = entity.clone();
                     let selected = policy == current;
@@ -853,14 +850,12 @@ impl ChatPanel {
                                 .justify_between()
                                 .gap(SPACE_LG)
                                 .child(
-                                    v_flex().gap(px(2.))
-                                        .child(div().child(t(title)))
-                                        .child(
-                                            div()
-                                                .text_size(FONT_CAPTION)
-                                                .text_color(muted_fg)
-                                                .child(t(sub)),
-                                        ),
+                                    v_flex().gap(px(2.)).child(div().child(t(title))).child(
+                                        div()
+                                            .text_size(FONT_CAPTION)
+                                            .text_color(muted_fg)
+                                            .child(t(sub)),
+                                    ),
                                 )
                                 .when(selected, |this| {
                                     this.child(
@@ -898,7 +893,11 @@ impl ChatPanel {
                     .ghost()
                     .rounded(RADIUS_BUTTON)
                     .label(agent.display_name())
-                    .icon(Icon::empty().path("icons/chevron-down.svg").with_size(px(12.)))
+                    .icon(
+                        Icon::empty()
+                            .path("icons/chevron-down.svg")
+                            .with_size(px(12.)),
+                    )
                     .tooltip(t("Switch agent"))
                     .dropdown_menu(move |mut menu, _, _| {
                         for a in acp::acp_targets() {
@@ -1234,47 +1233,51 @@ impl ChatPanel {
                         .gap(SPACE_SM)
                         // 待发送附件条:chip 上的 × 摘掉对应附件
                         .when(!self.pending_attachments.is_empty(), |this| {
-                    this.child(h_flex().flex_wrap().gap(SPACE_SM).children(
-                        self.pending_attachments.iter().enumerate().map(|(ix, a)| {
-                            let entity = cx.entity();
-                            let name = a.name.clone();
-                            h_flex()
-                                .gap(SPACE_XS)
-                                .items_center()
-                                .max_w(px(200.))
-                                .rounded(RADIUS_IMAGE)
-                                .border_1()
-                                .border_color(theme.border)
-                                .bg(theme.muted)
-                                .px(SPACE_SM)
-                                .py(px(2.))
-                                .text_size(FONT_CAPTION)
-                                .child(div().min_w_0().truncate().child(name))
-                                .child(
-                                    Button::new(SharedString::from(format!(
-                                        "chat-attach-rm-{ix}"
-                                    )))
-                                    .ghost()
-                                    .xsmall()
-                                    .rounded(RADIUS_IMAGE)
-                                    .icon(
-                                        Icon::empty()
-                                            .path("icons/circle-x.svg")
-                                            .with_size(px(12.)),
-                                    )
-                                    .tooltip(t("Remove attachment"))
-                                    .on_click(move |_, _, cx| {
-                                        entity.update(cx, |this, cx| {
-                                            this.pending_attachments.remove(ix);
-                                            cx.notify();
-                                        });
-                                    }),
-                                )
-                                .into_any_element()
-                        }),
-                    ))
-                })
-                        .child(Textarea::new(&self.composer).bordered(false).appearance(false))
+                            this.child(h_flex().flex_wrap().gap(SPACE_SM).children(
+                                self.pending_attachments.iter().enumerate().map(|(ix, a)| {
+                                    let entity = cx.entity();
+                                    let name = a.name.clone();
+                                    h_flex()
+                                        .gap(SPACE_XS)
+                                        .items_center()
+                                        .max_w(px(200.))
+                                        .rounded(RADIUS_IMAGE)
+                                        .border_1()
+                                        .border_color(theme.border)
+                                        .bg(theme.muted)
+                                        .px(SPACE_SM)
+                                        .py(px(2.))
+                                        .text_size(FONT_CAPTION)
+                                        .child(div().min_w_0().truncate().child(name))
+                                        .child(
+                                            Button::new(SharedString::from(format!(
+                                                "chat-attach-rm-{ix}"
+                                            )))
+                                            .ghost()
+                                            .xsmall()
+                                            .rounded(RADIUS_IMAGE)
+                                            .icon(
+                                                Icon::empty()
+                                                    .path("icons/circle-x.svg")
+                                                    .with_size(px(12.)),
+                                            )
+                                            .tooltip(t("Remove attachment"))
+                                            .on_click(move |_, _, cx| {
+                                                entity.update(cx, |this, cx| {
+                                                    this.pending_attachments.remove(ix);
+                                                    cx.notify();
+                                                });
+                                            }),
+                                        )
+                                        .into_any_element()
+                                }),
+                            ))
+                        })
+                        .child(
+                            Textarea::new(&self.composer)
+                                .bordered(false)
+                                .appearance(false),
+                        )
                         .child(
                             h_flex()
                                 .items_center()
@@ -1285,9 +1288,7 @@ impl ChatPanel {
                                         .ghost()
                                         .rounded(RADIUS_BUTTON)
                                         .icon(
-                                            Icon::empty()
-                                                .path("icons/plus.svg")
-                                                .with_size(px(16.)),
+                                            Icon::empty().path("icons/plus.svg").with_size(px(16.)),
                                         )
                                         .tooltip(t("Attach files"))
                                         .disabled(!self.can_prompt())
@@ -1492,9 +1493,16 @@ fn file_uri(path: &Path) -> String {
 /// required"、opencode "auth required"、适配器 401 等)
 fn looks_like_auth(message: &str) -> bool {
     let m = message.to_lowercase();
-    ["authenticat", "unauthorized", "not logged in", "login required", "api key", "credentials"]
-        .iter()
-        .any(|needle| m.contains(needle))
+    [
+        "authenticat",
+        "unauthorized",
+        "not logged in",
+        "login required",
+        "api key",
+        "credentials",
+    ]
+    .iter()
+    .any(|needle| m.contains(needle))
 }
 
 fn pretty_json(v: &serde_json::Value) -> String {

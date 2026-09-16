@@ -626,7 +626,9 @@ mod tests {
         ];
         for (tag, _, text) in BUNDLED {
             for key in parse(text).into_keys() {
-                if key == NAME_KEY || assembled_elsewhere(&key) || from_wake_core(&key)
+                if key == NAME_KEY
+                    || assembled_elsewhere(&key)
+                    || from_wake_core(&key)
                     || from_acp_dialects(&key)
                 {
                     continue;

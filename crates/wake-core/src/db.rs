@@ -500,7 +500,11 @@ impl Store {
     /// 的标题只是首条用户消息,而 agent 库侧通常已由模型起好名——两者并
     /// 存时 UI 取这里这份(native_id 即 agent 自己的 session id,ACP
     /// session 指针与库内行靠它对上)
-    pub fn titles_by_native_ids(&self, agent: &str, ids: &[String]) -> Result<HashMap<String, String>> {
+    pub fn titles_by_native_ids(
+        &self,
+        agent: &str,
+        ids: &[String],
+    ) -> Result<HashMap<String, String>> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }

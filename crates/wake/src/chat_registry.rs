@@ -31,7 +31,11 @@ pub fn load() -> Vec<ChatRecord> {
     let mut records: Vec<ChatRecord> = crate::prefs::read(FILE)
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default();
-    records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(b.created_at.cmp(&a.created_at)));
+    records.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then(b.created_at.cmp(&a.created_at))
+    });
     records
 }
 
@@ -54,7 +58,11 @@ pub fn upsert(record: ChatRecord) -> std::io::Result<()> {
     } else {
         records.push(record);
     }
-    records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(b.created_at.cmp(&a.created_at)));
+    records.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then(b.created_at.cmp(&a.created_at))
+    });
     records.truncate(CAP);
     let mut bytes = serde_json::to_vec_pretty(&records).map_err(std::io::Error::other)?;
     bytes.push(b'\n');
@@ -84,7 +92,11 @@ mod tests {
         // 不碰真实用户盘:upsert 是 IO 层,这里只测排序/截断逻辑等价的
         // 数据核——直接构造与 upsert 内部相同的变换
         let mut records = vec![record("a", 100, "first"), record("b", 200, "second")];
-        records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(b.created_at.cmp(&a.created_at)));
+        records.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then(b.created_at.cmp(&a.created_at))
+        });
         assert_eq!(records[0].session_id, "b");
         assert_eq!(records[1].session_id, "a");
         // 新回合把 a 顶到最新;标题为空不覆盖
@@ -96,14 +108,23 @@ mod tests {
             }
         }
         a.title = "renamed".to_string();
-        records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(b.created_at.cmp(&a.created_at)));
+        records.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then(b.created_at.cmp(&a.created_at))
+        });
         assert_eq!(records[0].session_id, "a");
         assert_eq!(records[0].title, "first");
         assert_eq!(records.len(), 2);
         // 截断留新
-        let mut many: Vec<ChatRecord> =
-            (0..CAP + 10).map(|i| record(&format!("s{i}"), i as i64, "t")).collect();
-        many.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(b.created_at.cmp(&a.created_at)));
+        let mut many: Vec<ChatRecord> = (0..CAP + 10)
+            .map(|i| record(&format!("s{i}"), i as i64, "t"))
+            .collect();
+        many.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then(b.created_at.cmp(&a.created_at))
+        });
         many.truncate(CAP);
         assert_eq!(many.len(), CAP);
         assert_eq!(many[0].session_id, format!("s{}", CAP + 9));
