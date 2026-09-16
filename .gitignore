@@ -34,3 +34,7 @@ chat-sessions.json
 wake.db
 wake.db-shm
 wake.db-wal
+
+# 测试 fixtures 里合法存在的 .claude 树(合成数据,非本地开发文件)
+!crates/wake-core/tests/fixtures/**/.claude/
+!crates/wake-core/tests/fixtures/**/.claude/**

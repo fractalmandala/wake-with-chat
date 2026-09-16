@@ -973,7 +973,9 @@ fn within_cwd(path: &Path, cwd: &Path) -> bool {
     path.starts_with(cwd)
 }
 
-#[cfg(test)]
+// 测试架基于 UnixStream(Unix 独有);Windows 上整个模块不出——这些契约
+// 已在 macOS/Linux CI 跑,Windows 保持编译可通过即可
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::net::UnixStream;
